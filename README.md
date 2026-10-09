@@ -2,21 +2,11 @@
 
 A little raspberry that lives in the terminal and reacts to the Raspberry Pi's real vitals.
 
-```
- .-------------.
-(  just vibing  )
- '-------------'
-      \
-    \\|//
-   .-'~'-.
-  / o   o \
- |  : ‿ :  |
-  \ :   : /
-   '-...-'
-     ^ ^
+<p align="center">
+  <img src="docs/piPetDemo.gif" alt="Pi Pet in a terminal cycling through its five moods: content and blinking, sleepy with floating Zs, hot with sweat drops, busy and running, and surfing on waves, with live temperature, load, fan, and Wi-Fi stats underneath" width="641">
+</p>
 
-temp 55.6°C  ·  load 0.46  ·  fan 1895 rpm  ·  wifi 3.0 KB/s
-```
+<sub>Recorded from real runs on the Pi (`--mood` forces each mood for the demo).</sub>
 
 ## Moods
 
