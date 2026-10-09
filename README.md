@@ -34,6 +34,14 @@ python3 piPet.py --mood hot   # force a mood: content, sleepy, hot, busy, surfin
 
 Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps one CPU core at 100% (Ctrl+C to stop); run it two or three times to push the load past 2.
 
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -p "*Test.py"
+```
+
+16 standard-library tests, no sensors needed. They check that every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), that every frame's lines line up, the mood rules and their priority (hot > busy > surfing > sleepy > content), `--mood` handling, and the status line when a sensor is missing.
+
 ## Where the data comes from
 
 | Stat | Source |
