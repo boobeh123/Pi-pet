@@ -180,6 +180,53 @@ class MoodTest(unittest.TestCase):
         self.assertEqual(set(piPet.FACES), set(piPet.SAYINGS))
 
 
+class NetRateTest(unittest.TestCase):
+    def measure(self, vitals, seconds, total_bytes):
+        """Take a network reading at a chosen time with a chosen byte count."""
+        with mock.patch.object(piPet.time, 'monotonic', return_value=seconds), \
+                mock.patch.object(piPet, 'read_net_bytes', return_value=total_bytes):
+            vitals.update_net_rate()
+
+    def make_measured_vitals(self, seconds=100.0, total_bytes=1_000_000):
+        vitals = make_vitals()
+        vitals.last_net, vitals.last_time = total_bytes, seconds
+        return vitals
+
+    def test_startup_does_not_spike(self):
+        # One 1500-byte packet between the two readings at startup used to read as ~30 MB/s
+        with mock.patch.object(piPet.time, 'monotonic', side_effect=[100.0, 100.00005]), \
+                mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]):
+            vitals = piPet.Vitals()
+        self.assertEqual(vitals.net_rate, 0)
+        self.assertNotEqual(vitals.mood(), 'surfing')
+
+    def test_readings_too_close_together_are_skipped(self):
+        vitals = self.make_measured_vitals()
+        self.measure(vitals, 100.1, 1_050_000)
+        self.assertEqual(vitals.net_rate, 0)
+        self.assertEqual(vitals.last_net, 1_000_000, 'the earlier reading should be kept')
+
+    def test_rate_over_two_seconds(self):
+        vitals = self.make_measured_vitals()
+        self.measure(vitals, 102.0, 1_000_000 + 400 * 1024)
+        self.assertEqual(vitals.net_rate, 200 * 1024)
+
+    def test_counter_reset_reads_as_zero(self):
+        vitals = self.make_measured_vitals()
+        self.measure(vitals, 102.0, 500)
+        self.assertEqual(vitals.net_rate, 0)
+
+    def test_missing_interface_reads_as_zero_then_starts_over(self):
+        vitals = self.make_measured_vitals()
+        vitals.net_rate = 300 * 1024
+        self.measure(vitals, 102.0, None)
+        self.assertEqual(vitals.net_rate, 0)
+        self.measure(vitals, 104.0, 5_000)  # interface is back with a fresh counter
+        self.assertEqual(vitals.net_rate, 0)
+        self.measure(vitals, 106.0, 5_000 + 2048)
+        self.assertEqual(vitals.net_rate, 1024)
+
+
 class CommandLineTest(unittest.TestCase):
     def test_valid_mood(self):
         with mock.patch.object(sys, 'argv', ['piPet.py', '--mood', 'hot']):

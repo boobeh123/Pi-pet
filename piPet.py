@@ -28,6 +28,9 @@ SURF_BYTES_PER_SEC = 200 * 1024
 SLEEPY_LOAD = 0.3
 SLEEPY_BYTES_PER_SEC = 5 * 1024
 
+# Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
+MIN_RATE_SECONDS = 0.5
+
 # Faces: (left eye, right eye, mouth). Every character must be exactly one terminal column wide,
 # so no emoji or East Asian wide characters, or the body falls out of alignment.
 FACES = {
@@ -96,11 +99,22 @@ class Vitals:
         self.temp_c = read_temp_c()
         self.load = os.getloadavg()[0]
         self.fan_rpm = read_fan_rpm()
+        self.update_net_rate()
 
+    def update_net_rate(self):
+        """Bytes per second since the last reading that was at least MIN_RATE_SECONDS ago."""
         now = time.monotonic()
         net = read_net_bytes()
-        if net is not None and self.last_net is not None and now > self.last_time:
-            self.net_rate = (net - self.last_net) / (now - self.last_time)
+        if net is None or self.last_net is None:
+            # Interface missing, or just came back: no speed until there are two readings to compare
+            self.net_rate = 0
+            self.last_net, self.last_time = net, now
+            return
+        elapsed = now - self.last_time
+        if elapsed < MIN_RATE_SECONDS:
+            return
+        # The byte counter restarts from 0 if the interface resets, which would read as a negative speed
+        self.net_rate = max(0, (net - self.last_net) / elapsed)
         self.last_net, self.last_time = net, now
 
     def mood(self):
