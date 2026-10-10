@@ -25,6 +25,8 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 | Sleepy | Load under 0.3 and almost no network traffic | Eyes closed, floating Zs |
 | Content | Anything else | Smiles and blinks |
 
+**Pet it:** press `p` in the live view and it's happy for 3 seconds: `^‿^` face, a little hop, and red `<3` hearts floating up.
+
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
 
 It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline), a red alert line under the stats says what.
@@ -36,9 +38,9 @@ The demo above was recorded before dizzy, stuffed, hungry, groggy and lonely wer
 Python 3 standard library only, so there's nothing to install.
 
 ```bash
-python3 piPet.py              # live, press q to quit
+python3 piPet.py              # live: press p to pet it, q to quit
 python3 piPet.py --once       # print one frame and exit
-python3 piPet.py --mood hot   # force a mood (see --help for all ten)
+python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
 python3 piPet.py --help       # list the options
 ```
@@ -53,13 +55,14 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-51 standard-library tests, no sensors needed. They check:
+55 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
 - the mood rules and their priority (dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content), and that a missing sensor never triggers a mood
 - the extras beside the pet (Zs, rain cloud, stars) never cover the pet or its speech bubble, and the alert line
 - reading the power alarm, memory, disk and uptime
+- petting: red hearts, the happy hop, and that the sensors alone never make it happy
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing

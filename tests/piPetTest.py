@@ -97,7 +97,7 @@ class DrawingTest(unittest.TestCase):
 
     def test_moods_with_extras(self):
         moods = {mood for mood in piPet.FACES if any(piPet.build_extras(mood, tick) for tick in TICKS)}
-        self.assertEqual(moods, {'sleepy', 'lonely', 'dizzy'})
+        self.assertEqual(moods, {'sleepy', 'lonely', 'dizzy', 'happy'})
 
     def test_animated_faces_change(self):
         for mood in ('content', 'hungry', 'stuffed', 'groggy'):
@@ -155,7 +155,7 @@ class LayoutTest(unittest.TestCase):
         cells = piPet.layout(24, 80, 'content', 1, 'just vibing', make_vitals())
         texts = [text for _, _, text, _ in cells]
         self.assertIn('(  just vibing  )', texts)
-        self.assertIn('q to quit', texts)
+        self.assertIn('p to pet  ·  q to quit', texts)
         self.assertTrue(any(text.startswith('temp ') for text in texts), 'full status line expected')
 
     def test_tiny_window_shows_a_message(self):
@@ -175,6 +175,28 @@ class LayoutTest(unittest.TestCase):
         (bubble_up, leaf_up), (bubble_down, leaf_down) = bubble_and_leaf_rows(1), bubble_and_leaf_rows(2)
         self.assertEqual(bubble_up, bubble_down)
         self.assertEqual(leaf_down, leaf_up + 1)
+
+
+class PettingTest(unittest.TestCase):
+    def test_happy_pet_shows_red_hearts(self):
+        cells = piPet.layout(24, 80, 'happy', 1, 'hehe!', make_vitals())
+        hearts = [color for _, _, text, color in cells if text == '<3']
+        self.assertEqual(hearts, ['berry', 'berry'])
+
+    def test_happy_pet_hops(self):
+        def leaf_row(tick):
+            cells = piPet.layout(24, 80, 'happy', tick, 'hehe!', make_vitals())
+            return next(row for row, _, text, _ in cells if '\\\\|//' in text)
+        self.assertEqual(leaf_row(2), leaf_row(1) + 1)
+
+    def test_sensors_never_pick_happy(self):
+        # Happiness only comes from petting
+        for readings in (dict(), dict(load=0.1), dict(load=1.0), dict(net_rate=300 * 1024)):
+            with self.subTest(readings=readings):
+                self.assertNotEqual(make_vitals(**readings).mood(), 'happy')
+
+    def test_happy_can_be_forced_for_demos(self):
+        self.assertEqual(piPet.parse_args(['--mood', 'happy']).mood, 'happy')
 
 
 class MoodTest(unittest.TestCase):
@@ -235,7 +257,7 @@ class AlertTest(unittest.TestCase):
         rows = {text: row for row, _, text, _ in cells}
         status_row = next(row for text, row in rows.items() if text.startswith('temp '))
         self.assertEqual(rows['offline'], status_row + 1)
-        self.assertIn('q to quit', rows)
+        self.assertIn('p to pet  ·  q to quit', rows)
 
     def test_alert_line_gives_way_in_a_short_window(self):
         # The surfing pet is the tallest (waves); --mood surfing on an offline Pi still has an alert

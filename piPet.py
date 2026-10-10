@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pi Pet: a little raspberry that lives in your terminal and reacts to the Pi's real vitals.
 
-    python3 piPet.py              # live, press q to quit
+    python3 piPet.py              # live: press p to pet it, q to quit
     python3 piPet.py --once       # print one frame and exit (no curses)
     python3 piPet.py --mood hot   # force a mood (--help lists them all)
     python3 piPet.py --iface eth0 # watch one network interface instead of following the default route
@@ -33,6 +33,8 @@ STUFFED_DISK_PERCENT = 90   # SD card this full or more
 HUNGRY_MEMORY_PERCENT = 10  # less memory than this still available
 GROGGY_UPTIME_SEC = 5 * 60  # booted less than this long ago
 
+PET_SECONDS = 3  # how long the pet stays happy after you press p
+
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
 
@@ -49,6 +51,7 @@ FACES = {
     'stuffed': [('u', 'u', '='), ('u', 'u', 'o')],  # second frame is a burp
     'groggy': [('-', 'o', '_'), ('-', '-', 'O')],  # one eye open; second frame is a yawn
     'lonely': [('.', '.', 'n')],
+    'happy': [('^', '^', '‿')],  # only when you pet it
 }
 
 SAYINGS = {
@@ -62,6 +65,7 @@ SAYINGS = {
     'stuffed': ['no room for dessert', 'so full...', 'maybe delete some files?', 'I ate the whole SD card'],
     'groggy': ['five more minutes...', 'just woke up', 'is it morning?', 'booting... slowly...'],
     'lonely': ['hello? anyone?', 'where did the internet go?', 'all alone out here', 'is the router okay?'],
+    'happy': ['hehe!', 'more please', 'that tickles!', 'best human ever'],
 }
 
 
@@ -274,8 +278,8 @@ def build_pet(mood, tick):
     """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra."""
     left_eye, right_eye, mouth = pick_face(mood, tick)
 
-    # Busy pet bounces up and down; surfing pet sways left and right
-    bounce = mood == 'busy' and tick % 2 == 0
+    # Busy pet bounces up and down, happy pet hops for joy; surfing pet sways left and right
+    bounce = mood in ('busy', 'happy') and tick % 2 == 0
     sway = ' ' * (tick % 4 if mood == 'surfing' else 0)
 
     lines = [
@@ -371,6 +375,12 @@ def build_stars(tick):
     return [(*orbit[tick % 6], '*'), (*orbit[(tick + 3) % 6], '*')]
 
 
+def build_hearts(tick):
+    """Two hearts floating up beside the happy pet's head."""
+    phase = tick % 6
+    return [(5 - phase, 14 + phase % 2, '<3'), ((8 - phase) % 6, 18 - phase % 2, '<3')]
+
+
 def build_extras(mood, tick):
     """Things drawn beside the pet, as (row, col, text) from the pet's top-left corner.
 
@@ -382,6 +392,8 @@ def build_extras(mood, tick):
         return build_cloud(tick // 2)
     if mood == 'dizzy':
         return build_stars(tick // 2)
+    if mood == 'happy':
+        return build_hearts(tick // 2)
     return []
 
 
@@ -437,8 +449,9 @@ def layout(height, width, mood, tick, saying, vitals):
         pet_top += len(bubble)
     for i, (text, color) in enumerate(pet):
         add(pet_top + i, left, text, color)
+    extras_color = 'berry' if mood == 'happy' else 'extra'  # red hearts
     for row, col, text in extras:
-        add(pet_top + row, left + col, text, 'extra')
+        add(pet_top + row, left + col, text, extras_color)
 
     status = build_status(vitals)
     if len(status) > width - 1:
@@ -451,7 +464,7 @@ def layout(height, width, mood, tick, saying, vitals):
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
 
     if last_row < height - 2:
-        add(height - 2, 1, 'q to quit', 'dim')
+        add(height - 2, 1, 'p to pet  ·  q to quit', 'dim')
     return cells
 
 
@@ -522,23 +535,34 @@ def run_live(screen, forced_mood=None, interface=None):
     tick = 0
     mood = vitals.mood()
     saying = random.choice(SAYINGS[mood])
+    petted_until = 0
+    was_petted = False
 
     while True:
         key = screen.getch()
         if key in (ord('q'), ord('Q'), 27):
             return
+        if key in (ord('p'), ord('P')):
+            if not was_petted:
+                saying = random.choice(SAYINGS['happy'])
+            petted_until = time.monotonic() + PET_SECONDS  # petting again keeps it happy longer
+        petted = time.monotonic() < petted_until
 
         # Sensors every 2 seconds; a new thing to say every ~10 seconds or on a mood change
         if tick % (FPS * 2) == 0:
             vitals.refresh()
             new_mood = vitals.mood()
-            if new_mood != mood or tick % (FPS * 10) == 0:
+            if not petted and (new_mood != mood or tick % (FPS * 10) == 0):
                 saying = random.choice(SAYINGS[new_mood])
             mood = new_mood
+        if was_petted and not petted:
+            saying = random.choice(SAYINGS[mood])  # back to its real mood
+        was_petted = petted
 
         screen.erase()
         height, width = screen.getmaxyx()
-        for row, col, text, color in layout(height, width, mood, tick, saying, vitals):
+        shown_mood = 'happy' if petted else mood
+        for row, col, text, color in layout(height, width, shown_mood, tick, saying, vitals):
             screen.addstr(row, col, text, colors[color])
         screen.refresh()
         tick += 1
