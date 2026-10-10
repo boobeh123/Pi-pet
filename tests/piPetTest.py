@@ -73,6 +73,18 @@ class DrawingTest(unittest.TestCase):
         self.assertEqual(len(top), len(bottom))
         self.assertIn('hello there', middle)
 
+    def test_zzz_never_cover_the_bubble_or_the_pet(self):
+        # Same placement as run_live: bubble directly above the pet, both starting at the same column
+        for saying in piPet.SAYINGS['sleepy']:
+            bubble = piPet.build_bubble(saying)
+            for tick in TICKS:
+                pet = [text for text, _ in piPet.build_pet('sleepy', tick)]
+                drawn = {(i - len(bubble), col) for i, line in enumerate(bubble + pet)
+                         for col, char in enumerate(line) if char != ' '}
+                for row, col, letter in piPet.build_zzz(tick):
+                    with self.subTest(saying=saying, tick=tick, letter=letter):
+                        self.assertNotIn((row, col), drawn)
+
     def test_sayings_fit_a_small_terminal(self):
         for sayings in piPet.SAYINGS.values():
             for saying in sayings:

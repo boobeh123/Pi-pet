@@ -179,9 +179,13 @@ def build_status(vitals):
 
 
 def build_zzz(tick):
-    """Floating Zs for the sleepy pet, drifting upward."""
+    """Floating Zs for the sleepy pet, drifting upward.
+
+    Returns (row, col, letter) measured from the pet's top-left corner. The Zs stay beside the
+    head and body (rows 0-5, right of the 13-column body), so they never land on the speech bubble.
+    """
     phase = tick % 6
-    return [(5 - phase, 15 + phase, 'z'), ((8 - phase) % 6, 17 + (phase + 3) % 6, 'Z')]
+    return [(5 - phase, 14 + phase, 'z'), ((8 - phase) % 6, 16 + (phase + 3) % 6, 'Z')]
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +271,7 @@ def run_live(screen):
             put(pet_top + i, left, text, colors[color])
         if mood == 'sleepy':
             for row, col, letter in build_zzz(tick // 2):
-                put(pet_top + row - 4, left + col - 4, letter, colors['extra'])
+                put(pet_top + row, left + col, letter, colors['extra'])
 
         put(pet_top + len(pet) + 1, (width - len(status)) // 2, status, curses.A_DIM)
         put(height - 2, 1, 'q to quit', curses.A_DIM)
