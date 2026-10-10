@@ -16,8 +16,9 @@ import piPet  # noqa: E402  (imported after the path is set)
 TICKS = range(24)  # long enough to cover every animation cycle (blink is every 12 ticks)
 
 
-def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None):
-    """A Vitals with chosen readings, without touching the real sensors."""
+def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
+                disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True):
+    """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
     vitals.chosen_interface = vitals.interface = 'wlan0'
@@ -25,6 +26,11 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None):
     vitals.load = load
     vitals.fan_rpm = 2000
     vitals.net_rate = net_rate
+    vitals.undervoltage = undervoltage
+    vitals.disk_used_percent = disk_used_percent
+    vitals.memory_free_percent = memory_free_percent
+    vitals.uptime_sec = uptime_sec
+    vitals.online = online
     return vitals
 
 
@@ -75,17 +81,34 @@ class DrawingTest(unittest.TestCase):
         self.assertEqual(len(top), len(bottom))
         self.assertIn('hello there', middle)
 
-    def test_zzz_never_cover_the_bubble_or_the_pet(self):
-        # Same placement as run_live: bubble directly above the pet, both starting at the same column
-        for saying in piPet.SAYINGS['sleepy']:
-            bubble = piPet.build_bubble(saying)
-            for tick in TICKS:
-                pet = [text for text, _ in piPet.build_pet('sleepy', tick)]
-                drawn = {(i - len(bubble), col) for i, line in enumerate(bubble + pet)
-                         for col, char in enumerate(line) if char != ' '}
-                for row, col, letter in piPet.build_zzz(tick):
-                    with self.subTest(saying=saying, tick=tick, letter=letter):
-                        self.assertNotIn((row, col), drawn)
+    def test_extras_never_cover_the_bubble_or_the_pet(self):
+        # Same placement as layout: bubble directly above the pet, both starting at the same column
+        for mood in piPet.FACES:
+            for saying in piPet.SAYINGS[mood]:
+                bubble = piPet.build_bubble(saying)
+                for tick in TICKS:
+                    pet = [text for text, _ in piPet.build_pet(mood, tick)]
+                    drawn = {(i - len(bubble), col) for i, line in enumerate(bubble + pet)
+                             for col, char in enumerate(line) if char != ' '}
+                    for row, col, text in piPet.build_extras(mood, tick):
+                        for offset, char in enumerate(text):
+                            with self.subTest(mood=mood, saying=saying, tick=tick, char=char):
+                                self.assertNotIn((row, col + offset), drawn)
+
+    def test_moods_with_extras(self):
+        moods = {mood for mood in piPet.FACES if any(piPet.build_extras(mood, tick) for tick in TICKS)}
+        self.assertEqual(moods, {'sleepy', 'lonely', 'dizzy'})
+
+    def test_animated_faces_change(self):
+        for mood in ('content', 'hungry', 'stuffed', 'groggy'):
+            faces = {piPet.pick_face(mood, tick) for tick in TICKS}
+            with self.subTest(mood=mood):
+                self.assertEqual(faces, set(piPet.FACES[mood]))
+
+    def test_stuffed_pet_has_puffed_cheeks(self):
+        cheeks = piPet.build_pet('stuffed', 1)[3][0]
+        self.assertIn('(:', cheeks)
+        self.assertIn(':)', cheeks)
 
     def test_sayings_fit_a_small_terminal(self):
         for sayings in piPet.SAYINGS.values():
@@ -156,8 +179,15 @@ class LayoutTest(unittest.TestCase):
 
 class MoodTest(unittest.TestCase):
     def test_moods_by_reading(self):
+        everything_wrong = dict(undervoltage=True, temp_c=72, disk_used_percent=95, memory_free_percent=5,
+                                uptime_sec=60, online=False, load=3, net_rate=500_000)
         cases = [
-            ('hot', dict(temp_c=72, load=3, net_rate=500_000)),  # hot beats everything
+            ('dizzy', everything_wrong),  # dizzy beats everything
+            ('hot', {**everything_wrong, 'undervoltage': False}),
+            ('stuffed', {**everything_wrong, 'undervoltage': False, 'temp_c': 60}),
+            ('hungry', dict(memory_free_percent=5, uptime_sec=60, online=False, load=3)),
+            ('groggy', dict(uptime_sec=60, online=False, load=3, net_rate=500_000)),  # groggy beats lonely and busy
+            ('lonely', dict(online=False, load=3, net_rate=500_000)),
             ('busy', dict(temp_c=60, load=2.5, net_rate=500_000)),  # busy beats surfing
             ('surfing', dict(temp_c=60, load=1.0, net_rate=300 * 1024)),
             ('sleepy', dict(temp_c=50, load=0.1, net_rate=1024)),
@@ -171,6 +201,16 @@ class MoodTest(unittest.TestCase):
         self.assertEqual(make_vitals(temp_c=piPet.HOT_TEMP_C).mood(), 'hot')
         self.assertEqual(make_vitals(load=piPet.BUSY_LOAD).mood(), 'busy')
         self.assertEqual(make_vitals(net_rate=piPet.SURF_BYTES_PER_SEC).mood(), 'surfing')
+        self.assertEqual(make_vitals(disk_used_percent=piPet.STUFFED_DISK_PERCENT).mood(), 'stuffed')
+
+    def test_thresholds_just_outside(self):
+        self.assertNotEqual(make_vitals(memory_free_percent=piPet.HUNGRY_MEMORY_PERCENT).mood(), 'hungry')
+        self.assertNotEqual(make_vitals(uptime_sec=piPet.GROGGY_UPTIME_SEC).mood(), 'groggy')
+
+    def test_missing_sensors_never_trigger_a_mood(self):
+        vitals = make_vitals(load=0.8, net_rate=20 * 1024, undervoltage=None, disk_used_percent=None,
+                             memory_free_percent=None, uptime_sec=None)
+        self.assertEqual(vitals.mood(), 'content')
 
     def test_missing_temperature_does_not_crash(self):
         self.assertEqual(make_vitals(temp_c=None, load=0.1).mood(), 'sleepy')
@@ -180,6 +220,72 @@ class MoodTest(unittest.TestCase):
 
     def test_every_mood_has_a_face_and_sayings(self):
         self.assertEqual(set(piPet.FACES), set(piPet.SAYINGS))
+
+
+class AlertTest(unittest.TestCase):
+    def test_healthy_pi_has_no_alerts(self):
+        self.assertEqual(piPet.build_alerts(make_vitals()), '')
+
+    def test_every_alert(self):
+        vitals = make_vitals(undervoltage=True, disk_used_percent=93.4, memory_free_percent=7.2, online=False)
+        self.assertEqual(piPet.build_alerts(vitals), 'power low  ·  disk 93% full  ·  memory 7% free  ·  offline')
+
+    def test_alert_line_shows_under_the_status_line(self):
+        cells = piPet.layout(24, 80, 'lonely', 1, 'hello? anyone?', make_vitals(online=False))
+        rows = {text: row for row, _, text, _ in cells}
+        status_row = next(row for text, row in rows.items() if text.startswith('temp '))
+        self.assertEqual(rows['offline'], status_row + 1)
+        self.assertIn('q to quit', rows)
+
+    def test_alert_line_gives_way_in_a_short_window(self):
+        # The surfing pet is the tallest (waves); --mood surfing on an offline Pi still has an alert
+        cells = piPet.layout(piPet.MIN_HEIGHT, 80, 'surfing', 1, 'whee, packets!', make_vitals(online=False))
+        texts = [text for _, _, text, _ in cells]
+        self.assertNotIn('offline', texts)
+        self.assertTrue(any('load' in text for text in texts))
+
+
+class SensorTest(unittest.TestCase):
+    def test_memory_free_percent(self):
+        meminfo = 'MemTotal:        8000000 kB\nMemFree:          100000 kB\nMemAvailable:     600000 kB\n'
+        with fake_file(meminfo):
+            self.assertEqual(piPet.read_memory_free_percent(), 7.5)
+        with fake_file('MemTotal:        8000000 kB\n'):
+            self.assertIsNone(piPet.read_memory_free_percent())
+
+    def test_uptime(self):
+        with fake_file('138736.54 532381.80\n'):
+            self.assertEqual(piPet.read_uptime_sec(), 138736.54)
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertIsNone(piPet.read_uptime_sec())
+
+    def test_disk_used_percent_matches_df(self):
+        # df: Use% = used / (used + available to ordinary users); reserved blocks don't count
+        stats = mock.Mock(f_blocks=1000, f_bfree=150, f_bavail=100)
+        with mock.patch.object(piPet.os, 'statvfs', return_value=stats):
+            self.assertAlmostEqual(piPet.read_disk_used_percent(), 850 / 950 * 100)
+        with mock.patch.object(piPet.os, 'statvfs', side_effect=OSError):
+            self.assertIsNone(piPet.read_disk_used_percent())
+
+    def test_undervoltage_found_by_hwmon_name(self):
+        files = {
+            '/sys/class/hwmon/hwmon0/name': 'cpu_thermal\n',
+            '/sys/class/hwmon/hwmon3/name': 'rpi_volt\n',
+            '/sys/class/hwmon/hwmon3/in0_lcrit_alarm': '1\n',
+        }
+
+        def fake_open(path, *args, **kwargs):
+            if path not in files:
+                raise FileNotFoundError(path)
+            return io.StringIO(files[path])
+
+        with mock.patch.object(piPet.glob, 'glob', return_value=sorted(n for n in files if n.endswith('name'))), \
+                mock.patch('builtins.open', side_effect=fake_open):
+            self.assertIs(piPet.read_undervoltage(), True)
+            files['/sys/class/hwmon/hwmon3/in0_lcrit_alarm'] = '0\n'
+            self.assertIs(piPet.read_undervoltage(), False)
+            files['/sys/class/hwmon/hwmon3/name'] = 'something_else\n'
+            self.assertIsNone(piPet.read_undervoltage())
 
 
 class NetRateTest(unittest.TestCase):

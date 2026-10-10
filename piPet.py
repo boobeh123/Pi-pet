@@ -3,7 +3,7 @@
 
     python3 piPet.py              # live, press q to quit
     python3 piPet.py --once       # print one frame and exit (no curses)
-    python3 piPet.py --mood hot   # force a mood: content, sleepy, hot, busy, surfing
+    python3 piPet.py --mood hot   # force a mood (--help lists them all)
     python3 piPet.py --iface eth0 # watch one network interface instead of following the default route
     python3 piPet.py --help       # list the options
 """
@@ -29,6 +29,9 @@ BUSY_LOAD = 2.0
 SURF_BYTES_PER_SEC = 200 * 1024
 SLEEPY_LOAD = 0.3
 SLEEPY_BYTES_PER_SEC = 5 * 1024
+STUFFED_DISK_PERCENT = 90   # SD card this full or more
+HUNGRY_MEMORY_PERCENT = 10  # less memory than this still available
+GROGGY_UPTIME_SEC = 5 * 60  # booted less than this long ago
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
@@ -41,6 +44,11 @@ FACES = {
     'hot': [('>', '<', '~')],
     'busy': [('o', 'o', 'o')],
     'surfing': [('^', '^', 'w')],
+    'dizzy': [('@', '@', '~')],
+    'hungry': [('o', 'o', 'O'), ('o', 'o', 'o')],  # chomping
+    'stuffed': [('u', 'u', '='), ('u', 'u', 'o')],  # second frame is a burp
+    'groggy': [('-', 'o', '_'), ('-', '-', 'O')],  # one eye open; second frame is a yawn
+    'lonely': [('.', '.', 'n')],
 }
 
 SAYINGS = {
@@ -49,6 +57,11 @@ SAYINGS = {
     'hot': ['it is getting toasty', 'fan, do your thing!', 'need... ice...'],
     'busy': ['working hard!', 'so many processes', 'cpu go brrr'],
     'surfing': ['whee, packets!', "who's downloading?", 'riding the wifi waves'],
+    'dizzy': ['power feels low...', 'everything is spinning', 'is that the official 27W charger?'],
+    'hungry': ['need... more... RAM', 'feed me memory', 'tummy rumbling', 'too many tabs open?'],
+    'stuffed': ['no room for dessert', 'so full...', 'maybe delete some files?', 'I ate the whole SD card'],
+    'groggy': ['five more minutes...', 'just woke up', 'is it morning?', 'booting... slowly...'],
+    'lonely': ['hello? anyone?', 'where did the internet go?', 'all alone out here', 'is the router okay?'],
 }
 
 
@@ -110,6 +123,59 @@ def get_default_interface():
     return best[1] if best else None
 
 
+def read_undervoltage():
+    """True if the kernel's undervoltage alarm is set (the power supply can't keep up), None if there's no sensor.
+
+    The Pi's voltage monitor is the hwmon device named rpi_volt; its hwmon number can change between boots.
+    """
+    for name_path in glob.glob('/sys/class/hwmon/hwmon*/name'):
+        try:
+            with open(name_path) as f:
+                if f.read().strip() != 'rpi_volt':
+                    continue
+        except OSError:
+            continue
+        alarm = read_number(os.path.join(os.path.dirname(name_path), 'in0_lcrit_alarm'))
+        return None if alarm is None else alarm == 1
+    return None
+
+
+def read_memory_free_percent():
+    """Memory programs can still get (MemAvailable) as a percentage of all memory, or None."""
+    values = {}
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                key, _, rest = line.partition(':')
+                if key in ('MemTotal', 'MemAvailable'):
+                    values[key] = int(rest.split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    if not values.get('MemTotal') or 'MemAvailable' not in values:
+        return None
+    return values['MemAvailable'] / values['MemTotal'] * 100
+
+
+def read_disk_used_percent(path='/'):
+    """How full the disk is, worked out the same way as df's Use% column, or None."""
+    try:
+        stats = os.statvfs(path)
+    except OSError:
+        return None
+    used = stats.f_blocks - stats.f_bfree
+    usable = used + stats.f_bavail  # df leaves out the blocks reserved for root
+    return used / usable * 100 if usable else None
+
+
+def read_uptime_sec():
+    """Seconds since the Pi booted, or None."""
+    try:
+        with open('/proc/uptime') as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 class Vitals:
     """Polls the sensors and works out network speed between polls."""
 
@@ -126,6 +192,11 @@ class Vitals:
         self.temp_c = read_temp_c()
         self.load = os.getloadavg()[0]
         self.fan_rpm = read_fan_rpm()
+        self.undervoltage = read_undervoltage()
+        self.memory_free_percent = read_memory_free_percent()
+        self.disk_used_percent = read_disk_used_percent()
+        self.uptime_sec = read_uptime_sec()
+        self.online = get_default_interface() is not None
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -150,10 +221,22 @@ class Vitals:
         self.last_net, self.last_time = net, now
 
     def mood(self):
+        """The first mood that fits, most urgent first. Missing sensors (None) never trigger a mood."""
         if self.forced_mood:
             return self.forced_mood
+        if self.undervoltage:
+            return 'dizzy'
         if self.temp_c is not None and self.temp_c >= HOT_TEMP_C:
             return 'hot'
+        if self.disk_used_percent is not None and self.disk_used_percent >= STUFFED_DISK_PERCENT:
+            return 'stuffed'
+        if self.memory_free_percent is not None and self.memory_free_percent < HUNGRY_MEMORY_PERCENT:
+            return 'hungry'
+        # Groggy beats lonely and busy: right after boot, Wi-Fi isn't up yet and the load is high
+        if self.uptime_sec is not None and self.uptime_sec < GROGGY_UPTIME_SEC:
+            return 'groggy'
+        if not self.online:
+            return 'lonely'
         if self.load >= BUSY_LOAD:
             return 'busy'
         if self.net_rate >= SURF_BYTES_PER_SEC:
@@ -173,12 +256,23 @@ def format_rate(bytes_per_sec):
     return f'{bytes_per_sec / 1024:.1f} KB/s'
 
 
+def pick_face(mood, tick):
+    """The face for this frame. Moods with a second face show it on their own schedule."""
+    frames = FACES[mood]
+    if mood == 'content' and tick % 12 == 0:  # blink every ~3 seconds
+        return frames[1]
+    if mood == 'hungry':  # chomp, chomp, twice a second
+        return frames[tick // 2 % 2]
+    if mood == 'stuffed' and tick % 16 >= 14:  # a burp every ~4 seconds
+        return frames[1]
+    if mood == 'groggy' and tick % 16 >= 12:  # a one-second yawn every ~4 seconds
+        return frames[1]
+    return frames[0]
+
+
 def build_pet(mood, tick):
     """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra."""
-    frames = FACES[mood]
-    # Blink for one frame every ~3 seconds when content
-    face = frames[1] if mood == 'content' and tick % 12 == 0 else frames[0]
-    left_eye, right_eye, mouth = face
+    left_eye, right_eye, mouth = pick_face(mood, tick)
 
     # Busy pet bounces up and down; surfing pet sways left and right
     bounce = mood == 'busy' and tick % 2 == 0
@@ -204,6 +298,9 @@ def build_pet(mood, tick):
         drop_row = 2 + tick % 3
         text, color = lines[drop_row]
         lines[drop_row] = ("'" + text[1:-1] + "'", color)
+    if mood == 'stuffed':
+        # Puffed-up cheeks
+        lines[3] = (f' | (: {mouth} :) | ', 'berry')
     if mood == 'surfing':
         lines.append(('~^~^~^~^~^~^~', 'extra'))
 
@@ -236,6 +333,20 @@ def build_short_status(vitals):
     return f'{temp}  load {vitals.load:.2f}  fan {fan}  {format_rate(vitals.net_rate)}'
 
 
+def build_alerts(vitals):
+    """Short notes for readings outside the normal range, or '' when all is well."""
+    alerts = []
+    if vitals.undervoltage:
+        alerts.append('power low')
+    if vitals.disk_used_percent is not None and vitals.disk_used_percent >= STUFFED_DISK_PERCENT:
+        alerts.append(f'disk {vitals.disk_used_percent:.0f}% full')
+    if vitals.memory_free_percent is not None and vitals.memory_free_percent < HUNGRY_MEMORY_PERCENT:
+        alerts.append(f'memory {vitals.memory_free_percent:.0f}% free')
+    if not vitals.online:
+        alerts.append('offline')
+    return '  ·  '.join(alerts)
+
+
 def build_zzz(tick):
     """Floating Zs for the sleepy pet, drifting upward.
 
@@ -246,12 +357,40 @@ def build_zzz(tick):
     return [(5 - phase, 14 + phase, 'z'), ((8 - phase) % 6, 16 + (phase + 3) % 6, 'Z')]
 
 
+def build_cloud(tick):
+    """A little rain cloud beside the lonely pet's head, with drops falling past its cheek."""
+    cells = [(0, 12, '.-~-.'), (1, 11, '(_____)')]
+    for i, col in enumerate((13, 15, 17)):
+        cells.append((2 + (tick + i) % 3, col, "'"))
+    return cells
+
+
+def build_stars(tick):
+    """Two stars circling the dizzy pet's head."""
+    orbit = [(0, 2), (0, 10), (2, 12), (4, 12), (4, 0), (2, 0)]  # clockwise around the head
+    return [(*orbit[tick % 6], '*'), (*orbit[(tick + 3) % 6], '*')]
+
+
+def build_extras(mood, tick):
+    """Things drawn beside the pet, as (row, col, text) from the pet's top-left corner.
+
+    They stay beside the pet rather than above it, so they never cover the speech bubble.
+    """
+    if mood == 'sleepy':
+        return build_zzz(tick // 2)
+    if mood == 'lonely':
+        return build_cloud(tick // 2)
+    if mood == 'dizzy':
+        return build_stars(tick // 2)
+    return []
+
+
 def layout(height, width, mood, tick, saying, vitals):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim. Nothing is placed on the bottom row or in the last
+    Colors: leaf, berry, extra, plain, dim, alert. Nothing is placed on the bottom row or in the last
     column, because curses raises an error when writing the window's bottom-right corner.
-    When space runs out, the pet and status line stay; the bubble and the quit hint go first.
+    When space runs out, the pet and status line stay; the alert line, the bubble and the quit hint go first.
     """
     cells = []
 
@@ -272,18 +411,23 @@ def layout(height, width, mood, tick, saying, vitals):
     bounced = pet[0][0] == ''
     pet_height = len(pet) - bounced  # center on the resting pet so the bounce moves the pet, not the bubble
     bubble = build_bubble(saying)
-    zzz = build_zzz(tick // 2) if mood == 'sleepy' else []
+    extras = build_extras(mood, tick)
+    alerts = build_alerts(vitals)
 
     usable = height - 1
     body_height = pet_height + 2  # pet, blank row, status line
+    if alerts and body_height + 1 <= usable:
+        body_height += 1  # alert line under the status line
+    else:
+        alerts = ''
     show_bubble = body_height + len(bubble) <= usable
     block_height = body_height + (len(bubble) if show_bubble else 0)
     top = (usable - block_height) // 2
 
-    # Center the pet, but move left if that keeps a long bubble (or the Zs) inside the window
+    # Center the pet, but move left if that keeps a long bubble (or the extras) inside the window
     widest = max([len(text) for text, _ in pet]
                  + ([len(line) for line in bubble] if show_bubble else [])
-                 + [col + 1 for _, col, _ in zzz])
+                 + [col + len(text) for _, col, text in extras])
     left = max(0, min((width - PET_WIDTH) // 2, width - 1 - widest))
 
     pet_top = top
@@ -293,16 +437,20 @@ def layout(height, width, mood, tick, saying, vitals):
         pet_top += len(bubble)
     for i, (text, color) in enumerate(pet):
         add(pet_top + i, left, text, color)
-    for row, col, letter in zzz:
-        add(pet_top + row, left + col, letter, 'extra')
+    for row, col, text in extras:
+        add(pet_top + row, left + col, text, 'extra')
 
     status = build_status(vitals)
     if len(status) > width - 1:
         status = build_short_status(vitals)
     status_row = pet_top + pet_height + 1
     add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
+    last_row = status_row
+    if alerts:
+        last_row += 1
+        add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
 
-    if status_row < height - 2:
+    if last_row < height - 2:
         add(height - 2, 1, 'q to quit', 'dim')
     return cells
 
@@ -349,6 +497,9 @@ def print_once(forced_mood=None, interface=None):
     print()
     print(f'mood: {mood}')
     print(build_status(vitals))
+    alerts = build_alerts(vitals)
+    if alerts:
+        print(alerts)
 
 
 def run_live(screen, forced_mood=None, interface=None):
@@ -364,6 +515,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'extra': curses.color_pair(3),
         'plain': 0,
         'dim': curses.A_DIM,
+        'alert': curses.color_pair(2),
     }
 
     vitals = Vitals(forced_mood, interface)
