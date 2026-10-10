@@ -92,6 +92,66 @@ class DrawingTest(unittest.TestCase):
                 self.assertLessEqual(widest, 60, f'"{saying}" makes a {widest}-column bubble')
 
 
+class LayoutTest(unittest.TestCase):
+    SIZES = [(24, 80), (40, 120), (14, 30), (12, 40), (11, 24)]  # (height, width), down to the minimum
+
+    def all_layouts(self, sizes=SIZES):
+        vitals = make_vitals()
+        for height, width in sizes:
+            for mood, sayings in piPet.SAYINGS.items():
+                for saying in sayings:
+                    for tick in TICKS:
+                        cells = piPet.layout(height, width, mood, tick, saying, vitals)
+                        yield (height, width, mood, saying, tick), cells
+
+    def test_everything_stays_inside_the_window(self):
+        for (height, width, *rest), cells in self.all_layouts():
+            for row, col, text, _ in cells:
+                with self.subTest(size=(height, width), case=rest, text=text):
+                    self.assertTrue(0 <= row < height - 1, f'row {row}')
+                    self.assertTrue(col >= 0 and col + len(text) <= width - 1, f'cols {col}-{col + len(text)}')
+
+    def test_nothing_draws_over_anything_else(self):
+        for case, cells in self.all_layouts():
+            seen = set()
+            for row, col, text, _ in cells:
+                for offset, char in enumerate(text):
+                    if char != ' ':
+                        with self.subTest(case=case, char=char):
+                            self.assertNotIn((row, col + offset), seen)
+                        seen.add((row, col + offset))
+
+    def test_status_line_always_shows(self):
+        for case, cells in self.all_layouts():
+            with self.subTest(case=case):
+                self.assertTrue(any('load' in text for _, _, text, _ in cells))
+
+    def test_roomy_window_shows_everything(self):
+        cells = piPet.layout(24, 80, 'content', 1, 'just vibing', make_vitals())
+        texts = [text for _, _, text, _ in cells]
+        self.assertIn('(  just vibing  )', texts)
+        self.assertIn('q to quit', texts)
+        self.assertTrue(any(text.startswith('temp ') for text in texts), 'full status line expected')
+
+    def test_tiny_window_shows_a_message(self):
+        for height, width in ((10, 80), (24, 23), (5, 10), (1, 1)):
+            cells = piPet.layout(height, width, 'content', 1, 'just vibing', make_vitals())
+            with self.subTest(size=(height, width)):
+                self.assertLessEqual(len(cells), 1)
+                self.assertTrue(all('window too small'.startswith(text) for _, _, text, _ in cells))
+
+    def test_busy_bounce_moves_the_pet_not_the_bubble(self):
+        def bubble_and_leaf_rows(tick):
+            cells = piPet.layout(24, 80, 'busy', tick, 'working hard!', make_vitals())
+            bubble_row = next(row for row, _, text, _ in cells if 'working hard!' in text)
+            leaf_row = next(row for row, _, text, _ in cells if '\\\\|//' in text)
+            return bubble_row, leaf_row
+
+        (bubble_up, leaf_up), (bubble_down, leaf_down) = bubble_and_leaf_rows(1), bubble_and_leaf_rows(2)
+        self.assertEqual(bubble_up, bubble_down)
+        self.assertEqual(leaf_down, leaf_up + 1)
+
+
 class MoodTest(unittest.TestCase):
     def test_moods_by_reading(self):
         cases = [

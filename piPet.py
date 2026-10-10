@@ -16,6 +16,11 @@ import time
 FPS = 4
 WIFI_INTERFACE = 'wlan0'
 
+# Smallest window that fits the pet and the status line; anything smaller gets a message instead
+PET_WIDTH = 13
+MIN_WIDTH = 24
+MIN_HEIGHT = 11
+
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
 BUSY_LOAD = 2.0
@@ -178,6 +183,13 @@ def build_status(vitals):
     return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  wifi {format_rate(vitals.net_rate)}'
 
 
+def build_short_status(vitals):
+    """A narrower status line for small windows."""
+    temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
+    fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)}'
+    return f'{temp}  load {vitals.load:.2f}  fan {fan}  {format_rate(vitals.net_rate)}'
+
+
 def build_zzz(tick):
     """Floating Zs for the sleepy pet, drifting upward.
 
@@ -186,6 +198,67 @@ def build_zzz(tick):
     """
     phase = tick % 6
     return [(5 - phase, 14 + phase, 'z'), ((8 - phase) % 6, 16 + (phase + 3) % 6, 'Z')]
+
+
+def layout(height, width, mood, tick, saying, vitals):
+    """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
+
+    Colors: leaf, berry, extra, plain, dim. Nothing is placed on the bottom row or in the last
+    column, because curses raises an error when writing the window's bottom-right corner.
+    When space runs out, the pet and status line stay; the bubble and the quit hint go first.
+    """
+    cells = []
+
+    def add(row, col, text, color):
+        if not 0 <= row < height - 1:
+            return
+        col = max(0, col)
+        text = text[:max(0, width - 1 - col)]
+        if text:
+            cells.append((row, col, text, color))
+
+    if height < MIN_HEIGHT or width < MIN_WIDTH:
+        message = 'window too small'
+        add(height // 2, (width - len(message)) // 2, message, 'dim')
+        return cells
+
+    pet = build_pet(mood, tick)
+    bounced = pet[0][0] == ''
+    pet_height = len(pet) - bounced  # center on the resting pet so the bounce moves the pet, not the bubble
+    bubble = build_bubble(saying)
+    zzz = build_zzz(tick // 2) if mood == 'sleepy' else []
+
+    usable = height - 1
+    body_height = pet_height + 2  # pet, blank row, status line
+    show_bubble = body_height + len(bubble) <= usable
+    block_height = body_height + (len(bubble) if show_bubble else 0)
+    top = (usable - block_height) // 2
+
+    # Center the pet, but move left if that keeps a long bubble (or the Zs) inside the window
+    widest = max([len(text) for text, _ in pet]
+                 + ([len(line) for line in bubble] if show_bubble else [])
+                 + [col + 1 for _, col, _ in zzz])
+    left = max(0, min((width - PET_WIDTH) // 2, width - 1 - widest))
+
+    pet_top = top
+    if show_bubble:
+        for i, line in enumerate(bubble):
+            add(top + i, left, line, 'plain')
+        pet_top += len(bubble)
+    for i, (text, color) in enumerate(pet):
+        add(pet_top + i, left, text, color)
+    for row, col, letter in zzz:
+        add(pet_top + row, left + col, letter, 'extra')
+
+    status = build_status(vitals)
+    if len(status) > width - 1:
+        status = build_short_status(vitals)
+    status_row = pet_top + pet_height + 1
+    add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
+
+    if status_row < height - 2:
+        add(height - 2, 1, 'q to quit', 'dim')
+    return cells
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +302,8 @@ def run_live(screen):
         'leaf': curses.color_pair(1) | curses.A_BOLD,
         'berry': curses.color_pair(2) | curses.A_BOLD,
         'extra': curses.color_pair(3),
+        'plain': 0,
+        'dim': curses.A_DIM,
     }
 
     vitals = Vitals(get_forced_mood())
@@ -251,31 +326,8 @@ def run_live(screen):
 
         screen.erase()
         height, width = screen.getmaxyx()
-        pet = build_pet(mood, tick)
-        bubble = build_bubble(saying)
-        status = build_status(vitals)
-
-        block_height = len(bubble) + len(pet) + 3
-        top = max(0, (height - block_height) // 2)
-        left = max(0, (width - 13) // 2)
-
-        def put(row, col, text, attr=0):
-            # Skip anything that would fall off a small terminal
-            if 0 <= row < height - 1 and col < width:
-                screen.addnstr(row, max(0, col), text, max(0, width - col - 1), attr)
-
-        for i, line in enumerate(bubble):
-            put(top + i, left, line)
-        pet_top = top + len(bubble)
-        for i, (text, color) in enumerate(pet):
-            put(pet_top + i, left, text, colors[color])
-        if mood == 'sleepy':
-            for row, col, letter in build_zzz(tick // 2):
-                put(pet_top + row, left + col, letter, colors['extra'])
-
-        put(pet_top + len(pet) + 1, (width - len(status)) // 2, status, curses.A_DIM)
-        put(height - 2, 1, 'q to quit', curses.A_DIM)
-
+        for row, col, text, color in layout(height, width, mood, tick, saying, vitals):
+            screen.addstr(row, col, text, colors[color])
         screen.refresh()
         tick += 1
         time.sleep(1 / FPS)
