@@ -3,6 +3,7 @@
     python3 -m unittest discover -s tests -p "*Test.py"
 """
 
+import io
 import sys
 import unicodedata
 import unittest
@@ -228,20 +229,38 @@ class NetRateTest(unittest.TestCase):
 
 
 class CommandLineTest(unittest.TestCase):
-    def test_valid_mood(self):
-        with mock.patch.object(sys, 'argv', ['piPet.py', '--mood', 'hot']):
-            self.assertEqual(piPet.get_forced_mood(), 'hot')
+    def parse_with_error(self, argv):
+        """Parse arguments that should be rejected; return argparse's error message."""
+        with mock.patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+            with self.assertRaises(SystemExit) as exit_info:
+                piPet.parse_args(argv)
+        self.assertEqual(exit_info.exception.code, 2)
+        return stderr.getvalue()
 
-    def test_no_mood(self):
-        with mock.patch.object(sys, 'argv', ['piPet.py']):
-            self.assertIsNone(piPet.get_forced_mood())
+    def test_defaults(self):
+        args = piPet.parse_args([])
+        self.assertFalse(args.once)
+        self.assertIsNone(args.mood)
 
-    def test_unknown_or_missing_mood_exits_with_a_message(self):
-        for argv in (['piPet.py', '--mood', 'angry'], ['piPet.py', '--mood']):
-            with self.subTest(argv=argv), mock.patch.object(sys, 'argv', argv):
-                with self.assertRaises(SystemExit) as exit_info:
-                    piPet.get_forced_mood()
-                self.assertIn('Pick one of', str(exit_info.exception.code))
+    def test_both_mood_spellings(self):
+        for argv in (['--mood', 'hot'], ['--mood=hot']):
+            with self.subTest(argv=argv):
+                self.assertEqual(piPet.parse_args(argv).mood, 'hot')
+
+    def test_once_with_a_mood(self):
+        args = piPet.parse_args(['--once', '--mood', 'sleepy'])
+        self.assertTrue(args.once)
+        self.assertEqual(args.mood, 'sleepy')
+
+    def test_unknown_mood_lists_the_choices(self):
+        message = self.parse_with_error(['--mood', 'angry'])
+        self.assertIn("invalid choice: 'angry'", message)
+        for mood in piPet.FACES:
+            self.assertIn(mood, message)
+
+    def test_missing_mood_or_typo_is_an_error(self):
+        self.assertIn('expected one argument', self.parse_with_error(['--mood']))
+        self.assertIn('unrecognized arguments: --onec', self.parse_with_error(['--onec']))
 
 
 class FormatTest(unittest.TestCase):

@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Pi Pet: a little raspberry that lives in your terminal and reacts to the Pi's real vitals.
 
-    python3 piPet.py          # live, press q to quit
-    python3 piPet.py --once   # print one frame and exit (no curses)
+    python3 piPet.py              # live, press q to quit
+    python3 piPet.py --once       # print one frame and exit (no curses)
     python3 piPet.py --mood hot   # force a mood: content, sleepy, hot, busy, surfing
+    python3 piPet.py --help       # list the options
 """
 
+import argparse
 import curses
 import glob
 import os
 import random
-import sys
 import time
 
 FPS = 4
@@ -279,19 +280,18 @@ def layout(height, width, mood, tick, saying, vitals):
 # Modes
 # ---------------------------------------------------------------------------
 
-def get_forced_mood():
-    """Read --mood NAME from the command line, or None."""
-    if '--mood' not in sys.argv:
-        return None
-    index = sys.argv.index('--mood')
-    mood = sys.argv[index + 1] if index + 1 < len(sys.argv) else ''
-    if mood not in FACES:
-        sys.exit(f"Unknown mood '{mood}'. Pick one of: {', '.join(FACES)}")
-    return mood
+def parse_args(argv=None):
+    """Read the command line. Bad options print a usage message and exit before curses starts."""
+    parser = argparse.ArgumentParser(
+        description="A little raspberry that lives in your terminal and reacts to the Pi's real vitals.",
+    )
+    parser.add_argument('--once', action='store_true', help='print one frame and exit')
+    parser.add_argument('--mood', choices=list(FACES), help="force a mood instead of reading the Pi's vitals")
+    return parser.parse_args(argv)
 
 
-def print_once():
-    vitals = Vitals(get_forced_mood())
+def print_once(forced_mood=None):
+    vitals = Vitals(forced_mood)
     time.sleep(1)  # one second of network data so speed isn't 0
     vitals.refresh()
     mood = vitals.mood()
@@ -305,7 +305,7 @@ def print_once():
     print(build_status(vitals))
 
 
-def run_live(screen):
+def run_live(screen, forced_mood=None):
     curses.curs_set(0)
     screen.nodelay(True)
     curses.use_default_colors()
@@ -320,7 +320,7 @@ def run_live(screen):
         'dim': curses.A_DIM,
     }
 
-    vitals = Vitals(get_forced_mood())
+    vitals = Vitals(forced_mood)
     tick = 0
     mood = vitals.mood()
     saying = random.choice(SAYINGS[mood])
@@ -348,11 +348,12 @@ def run_live(screen):
 
 
 def main():
-    if '--once' in sys.argv:
-        print_once()
+    args = parse_args()
+    if args.once:
+        print_once(args.mood)
         return
     try:
-        curses.wrapper(run_live)
+        curses.wrapper(run_live, args.mood)
     except KeyboardInterrupt:
         pass
 

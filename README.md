@@ -30,7 +30,10 @@ Python 3 standard library only, so there's nothing to install.
 python3 piPet.py              # live, press q to quit
 python3 piPet.py --once       # print one frame and exit
 python3 piPet.py --mood hot   # force a mood: content, sleepy, hot, busy, surfing
+python3 piPet.py --help       # list the options
 ```
+
+In a small terminal window it drops the speech bubble first and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
 
 Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps one CPU core at 100% (Ctrl+C to stop); run it two or three times to push the load past 2.
 
@@ -40,7 +43,13 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-16 standard-library tests, no sensors needed. They check that every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), that every frame's lines line up, the mood rules and their priority (hot > busy > surfing > sleepy > content), `--mood` handling, and the status line when a sensor is missing.
+30 standard-library tests, no sensors needed. They check:
+
+- every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
+- the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
+- the mood rules and their priority (hot > busy > surfing > sleepy > content)
+- the Wi-Fi speed: no spike at startup, and counter resets or a missing interface read as 0
+- the command-line options, and the status line when a sensor is missing
 
 ## Where the data comes from
 
