@@ -20,6 +20,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None):
     """A Vitals with chosen readings, without touching the real sensors."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
+    vitals.chosen_interface = vitals.interface = 'wlan0'
     vitals.temp_c = temp_c
     vitals.load = load
     vitals.fan_rpm = 2000
@@ -197,7 +198,7 @@ class NetRateTest(unittest.TestCase):
         # One 1500-byte packet between the two readings at startup used to read as ~30 MB/s
         with mock.patch.object(piPet.time, 'monotonic', side_effect=[100.0, 100.00005]), \
                 mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]):
-            vitals = piPet.Vitals()
+            vitals = piPet.Vitals(interface='wlan0')
         self.assertEqual(vitals.net_rate, 0)
         self.assertNotEqual(vitals.mood(), 'surfing')
 
@@ -228,6 +229,74 @@ class NetRateTest(unittest.TestCase):
         self.assertEqual(vitals.net_rate, 1024)
 
 
+SAMPLE_ROUTE = """\
+Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+wlan0\t00000000\t0144A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0
+eth0\t00000000\t0144A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
+eth0\t0044A8C0\t00000000\t0001\t0\t0\t100\t00FCFFFF\t0\t0\t0
+"""
+
+SAMPLE_NET_DEV = """\
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:  673446  2920    0    0    0     0          0         0   673446  2920    0    0    0     0       0          0
+  eth0:    1000    10    0    0    0     0          0         0      200     2    0    0    0     0       0          0
+ wlan0:   50000   500    0    0    0     0          0         0     7000    70    0    0    0     0       0          0
+"""
+
+
+def fake_file(text):
+    return mock.patch('builtins.open', mock.mock_open(read_data=text))
+
+
+class InterfaceTest(unittest.TestCase):
+    def test_default_route_with_the_lowest_metric_wins(self):
+        with fake_file(SAMPLE_ROUTE):
+            self.assertEqual(piPet.get_default_interface(), 'eth0')
+
+    def test_single_default_route(self):
+        wifi_only = '\n'.join(line for line in SAMPLE_ROUTE.splitlines() if not line.startswith('eth0'))
+        with fake_file(wifi_only):
+            self.assertEqual(piPet.get_default_interface(), 'wlan0')
+
+    def test_no_default_route_or_no_file(self):
+        local_only = '\n'.join(SAMPLE_ROUTE.splitlines()[::3])  # header and the non-default eth0 route
+        with fake_file(local_only):
+            self.assertIsNone(piPet.get_default_interface())
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertIsNone(piPet.get_default_interface())
+
+    def test_read_net_bytes_adds_in_and_out_for_one_interface(self):
+        for interface, expected in (('wlan0', 57000), ('eth0', 1200), ('wlan1', None), ('wlan', None)):
+            with self.subTest(interface=interface), fake_file(SAMPLE_NET_DEV):
+                self.assertEqual(piPet.read_net_bytes(interface), expected)
+
+    def test_switching_networks_starts_a_fresh_measurement(self):
+        vitals = make_vitals()
+        vitals.chosen_interface = None  # following the default route
+        vitals.last_net, vitals.last_time = 1_000_000, 100.0
+        with mock.patch.object(piPet, 'get_default_interface', return_value='eth0'), \
+                mock.patch.object(piPet.time, 'monotonic', return_value=102.0), \
+                mock.patch.object(piPet, 'read_net_bytes', return_value=5_000) as read:
+            vitals.update_net_rate()
+        read.assert_called_with('eth0')
+        self.assertEqual(vitals.interface, 'eth0')
+        self.assertEqual(vitals.net_rate, 0, 'wlan0 and eth0 byte counts must not be compared')
+
+    def test_chosen_interface_is_not_switched(self):
+        vitals = make_vitals()  # chosen_interface is wlan0
+        with mock.patch.object(piPet, 'get_default_interface', return_value='eth0') as detect, \
+                mock.patch.object(piPet, 'read_net_bytes', return_value=None):
+            vitals.update_net_rate()
+        detect.assert_not_called()
+        self.assertEqual(vitals.interface, 'wlan0')
+
+    def test_status_line_names_the_interface(self):
+        vitals = make_vitals(net_rate=1536)
+        vitals.interface = 'eth0'
+        self.assertIn('eth0 1.5 KB/s', piPet.build_status(vitals))
+
+
 class CommandLineTest(unittest.TestCase):
     def parse_with_error(self, argv):
         """Parse arguments that should be rejected; return argparse's error message."""
@@ -241,6 +310,7 @@ class CommandLineTest(unittest.TestCase):
         args = piPet.parse_args([])
         self.assertFalse(args.once)
         self.assertIsNone(args.mood)
+        self.assertIsNone(args.iface)
 
     def test_both_mood_spellings(self):
         for argv in (['--mood', 'hot'], ['--mood=hot']):
@@ -257,6 +327,10 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("invalid choice: 'angry'", message)
         for mood in piPet.FACES:
             self.assertIn(mood, message)
+
+    def test_iface_must_exist(self):
+        self.assertEqual(piPet.parse_args(['--iface', 'lo']).iface, 'lo')  # every Linux machine has lo
+        self.assertIn("no network interface called 'wlna0'", self.parse_with_error(['--iface', 'wlna0']))
 
     def test_missing_mood_or_typo_is_an_error(self):
         self.assertIn('expected one argument', self.parse_with_error(['--mood']))

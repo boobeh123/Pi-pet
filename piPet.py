@@ -4,6 +4,7 @@
     python3 piPet.py              # live, press q to quit
     python3 piPet.py --once       # print one frame and exit (no curses)
     python3 piPet.py --mood hot   # force a mood: content, sleepy, hot, busy, surfing
+    python3 piPet.py --iface eth0 # watch one network interface instead of following the default route
     python3 piPet.py --help       # list the options
 """
 
@@ -15,7 +16,7 @@ import random
 import time
 
 FPS = 4
-WIFI_INTERFACE = 'wlan0'
+DEFAULT_INTERFACE = 'wlan0'  # used when there's no default route to follow
 
 # Smallest window that fits the pet and the status line; anything smaller gets a message instead
 PET_WIDTH = 13
@@ -73,25 +74,50 @@ def read_fan_rpm():
     return read_number(matches[0]) if matches else None
 
 
-def read_net_bytes():
-    """Total bytes received + sent on Wi-Fi so far."""
+def read_net_bytes(interface):
+    """Total bytes received + sent on a network interface so far, or None if it isn't there."""
     try:
         with open('/proc/net/dev') as f:
             for line in f:
-                if line.strip().startswith(f'{WIFI_INTERFACE}:'):
-                    fields = line.split(':')[1].split()
+                name, _, counters = line.partition(':')
+                if name.strip() == interface:
+                    fields = counters.split()
                     return int(fields[0]) + int(fields[8])
-    except OSError:
+    except (OSError, ValueError, IndexError):
         pass
     return None
+
+
+def get_default_interface():
+    """The interface that carries the default route (internet traffic), or None.
+
+    If several are up (say Wi-Fi and Ethernet), the lowest metric wins, the same one Linux uses.
+    """
+    best = None  # (metric, name)
+    try:
+        with open('/proc/net/route') as f:
+            next(f, None)  # header line
+            for line in f:
+                fields = line.split()
+                if len(fields) < 7:
+                    continue
+                name, destination, flags, metric = fields[0], fields[1], int(fields[3], 16), int(fields[6])
+                if destination == '00000000' and flags & 1:  # flag 1 means the route is up
+                    if best is None or metric < best[0]:
+                        best = (metric, name)
+    except (OSError, ValueError):
+        return None
+    return best[1] if best else None
 
 
 class Vitals:
     """Polls the sensors and works out network speed between polls."""
 
-    def __init__(self, forced_mood=None):
+    def __init__(self, forced_mood=None, interface=None):
         self.forced_mood = forced_mood
-        self.last_net = read_net_bytes()
+        self.chosen_interface = interface  # from --iface; None means follow the default route
+        self.interface = interface or get_default_interface() or DEFAULT_INTERFACE
+        self.last_net = read_net_bytes(self.interface)
         self.last_time = time.monotonic()
         self.net_rate = 0
         self.refresh()
@@ -104,8 +130,13 @@ class Vitals:
 
     def update_net_rate(self):
         """Bytes per second since the last reading that was at least MIN_RATE_SECONDS ago."""
+        if not self.chosen_interface:
+            # Follow the default route; a switch (Wi-Fi to Ethernet, say) starts a fresh measurement
+            interface = get_default_interface() or DEFAULT_INTERFACE
+            if interface != self.interface:
+                self.interface, self.last_net = interface, None
         now = time.monotonic()
-        net = read_net_bytes()
+        net = read_net_bytes(self.interface)
         if net is None or self.last_net is None:
             # Interface missing, or just came back: no speed until there are two readings to compare
             self.net_rate = 0
@@ -195,7 +226,7 @@ def build_bubble(text):
 def build_status(vitals):
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
     fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)} rpm'
-    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  wifi {format_rate(vitals.net_rate)}'
+    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {vitals.interface} {format_rate(vitals.net_rate)}'
 
 
 def build_short_status(vitals):
@@ -280,6 +311,17 @@ def layout(height, width, mood, tick, saying, vitals):
 # Modes
 # ---------------------------------------------------------------------------
 
+def check_interface(name):
+    """argparse type for --iface: the name must be a network interface on this machine."""
+    try:
+        names = os.listdir('/sys/class/net')
+    except OSError:
+        names = []
+    if name not in names:
+        raise argparse.ArgumentTypeError(f"no network interface called '{name}' (have: {', '.join(sorted(names))})")
+    return name
+
+
 def parse_args(argv=None):
     """Read the command line. Bad options print a usage message and exit before curses starts."""
     parser = argparse.ArgumentParser(
@@ -287,11 +329,15 @@ def parse_args(argv=None):
     )
     parser.add_argument('--once', action='store_true', help='print one frame and exit')
     parser.add_argument('--mood', choices=list(FACES), help="force a mood instead of reading the Pi's vitals")
+    parser.add_argument(
+        '--iface', type=check_interface, metavar='NAME',
+        help='network interface to watch, like wlan0 or eth0 (default: whichever carries internet traffic)',
+    )
     return parser.parse_args(argv)
 
 
-def print_once(forced_mood=None):
-    vitals = Vitals(forced_mood)
+def print_once(forced_mood=None, interface=None):
+    vitals = Vitals(forced_mood, interface)
     time.sleep(1)  # one second of network data so speed isn't 0
     vitals.refresh()
     mood = vitals.mood()
@@ -305,7 +351,7 @@ def print_once(forced_mood=None):
     print(build_status(vitals))
 
 
-def run_live(screen, forced_mood=None):
+def run_live(screen, forced_mood=None, interface=None):
     curses.curs_set(0)
     screen.nodelay(True)
     curses.use_default_colors()
@@ -320,7 +366,7 @@ def run_live(screen, forced_mood=None):
         'dim': curses.A_DIM,
     }
 
-    vitals = Vitals(forced_mood)
+    vitals = Vitals(forced_mood, interface)
     tick = 0
     mood = vitals.mood()
     saying = random.choice(SAYINGS[mood])
@@ -350,10 +396,10 @@ def run_live(screen, forced_mood=None):
 def main():
     args = parse_args()
     if args.once:
-        print_once(args.mood)
+        print_once(args.mood, args.iface)
         return
     try:
-        curses.wrapper(run_live, args.mood)
+        curses.wrapper(run_live, args.mood, args.iface)
     except KeyboardInterrupt:
         pass
 
