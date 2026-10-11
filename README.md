@@ -58,6 +58,21 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 
 The guard stands nearest the pet, since it's always there. If AdGuard Home stops, the alert line says `AdGuard stopped`. On a Pi without AdGuard Home there's no guard.
 
+## The plant
+
+A potted plant on the pet's right grows with the Pi's uptime, so a reboot repots it:
+
+```
+sprout     seedling    leafy      in flower
+< 1 day    1-3 days    3-7 days   7+ days
+                        v         (@)
+             v         \|/        \|/
+  v          |          |          |
+\___/      \___/      \___/      \___/
+```
+
+Once it flowers, the pet sometimes brags about it.
+
 When Claude arrives the pet says "oh hi Claude!". While pals are around, its calm moods (content, busy, surfing) sometimes chat with them. Urgent moods stick to their own news.
 
 In a smaller terminal window it drops the scene first, then the speech bubble, and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
@@ -70,7 +85,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-78 standard-library tests, no sensors needed. They check:
+85 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -81,6 +96,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the scene: only in big windows, never overlapping anything at any hour, sun by day and moon and stars by night, the sun's path, stars that twinkle without moving, and grass right under the feet
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
+- the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
@@ -95,7 +111,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Undervoltage | `/sys/class/hwmon/hwmon*/in0_lcrit_alarm` on the hwmon named `rpi_volt` |
 | Disk | `os.statvfs('/')`, same math as `df`'s Use% |
 | Memory | `MemAvailable` ÷ `MemTotal` in `/proc/meminfo` |
-| Uptime | `/proc/uptime` |
+| Uptime (groggy, the plant) | `/proc/uptime` |
 | Time of day | the Pi's local clock (`time.localtime()`) |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
 | AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs |

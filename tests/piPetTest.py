@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import piPet  # noqa: E402  (imported after the path is set)
 
+DAY = 86400
 TICKS = range(24)  # long enough to cover every animation cycle (blink is every 12 ticks)
 
 
@@ -126,7 +127,8 @@ class LayoutTest(unittest.TestCase):
     SIZES = [(24, 80), (40, 120), (14, 30), (12, 40), (11, 24)]  # (height, width), down to the minimum
 
     def all_layouts(self, sizes=SIZES):
-        vitals = make_vitals(claude_here=True, adguard_running=True)  # with both pals, wherever there's room
+        # With both pals and the plant in flower (its tallest), wherever there's room
+        vitals = make_vitals(claude_here=True, adguard_running=True, uptime_sec=8 * DAY)
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -262,7 +264,7 @@ class SceneTest(unittest.TestCase):
                 for mood in piPet.FACES:
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
-                                             make_vitals(hour=hour, claude_here=True,
+                                             make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
                                                          adguard_running=tick % 2 == 0))  # guard awake or asleep
                         seen = set()
                         for row, col, text, _ in cells:
@@ -435,6 +437,58 @@ class GuardTest(unittest.TestCase):
         said_asleep = {piPet.pick_saying('content', make_vitals(adguard_running=False), rng) for _ in range(200)}
         self.assertTrue(said_on_watch & set(piPet.GUARD_SAYINGS))
         self.assertFalse(said_asleep & set(piPet.GUARD_SAYINGS))
+
+
+class PlantTest(unittest.TestCase):
+    def plant_cells(self, uptime_sec, mood='content', tick=1, height=24, width=80):
+        cells = piPet.layout(height, width, mood, tick, 'hi', make_vitals(uptime_sec=uptime_sec))
+        return cells, [(row, col, text, color) for row, col, text, color in cells if color == 'pot' or text == ' (@) '
+                       or (color == 'leaf' and len(text) == 5)]
+
+    def test_grows_with_uptime(self):
+        cases = [(0, 0), (0.99 * DAY, 0), (1 * DAY, 1), (2.9 * DAY, 1), (3 * DAY, 2), (7 * DAY, 3), (365 * DAY, 3)]
+        for uptime_sec, stage in cases:
+            with self.subTest(days=uptime_sec / DAY):
+                self.assertEqual(piPet.plant_stage(uptime_sec), stage)
+
+    def test_taller_as_it_grows_and_flowers_last(self):
+        heights = [len(lines) for _, lines in piPet.PLANT_STAGES]
+        self.assertEqual(heights, sorted(heights))
+        self.assertIn('@', piPet.PLANT_STAGES[-1][1][0][0])
+        self.assertFalse(any('@' in text for _, lines in piPet.PLANT_STAGES[:-1] for text, _ in lines))
+
+    def test_plant_lines_line_up(self):
+        for _, lines in piPet.PLANT_STAGES:
+            self.assertEqual(len({len(text) for text, _ in lines}), 1)
+            for text, color in lines:
+                self.assertIn(color, ('leaf', 'berry', 'pot'))
+                for char in text:
+                    self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+
+    def test_no_uptime_no_plant(self):
+        self.assertEqual(piPet.build_plant(None), [])
+        self.assertEqual(self.plant_cells(None)[1], [])
+
+    def test_plant_stands_on_the_ground_right_of_the_pet(self):
+        for mood in piPet.FACES:
+            for tick in TICKS:
+                cells, plant = self.plant_cells(8 * DAY, mood=mood, tick=tick)
+                ground_row = next(row for row, _, _, color in cells if color == 'grass')
+                pot_row, pot_col = next((row, col) for row, col, _, color in plant if color == 'pot')
+                pet_cols = [col + len(text.rstrip()) for _, col, text, color in cells if color in ('leaf', 'berry') and len(text) >= 13]
+                with self.subTest(mood=mood, tick=tick):
+                    self.assertEqual(pot_row, ground_row - 1)
+                    self.assertGreater(pot_col, max(pet_cols))
+
+    def test_no_room_no_plant(self):
+        self.assertEqual(self.plant_cells(8 * DAY, height=20, width=40)[1], [])
+
+    def test_pet_brags_only_when_it_flowers(self):
+        rng = random.Random(3)
+        said_in_flower = {piPet.pick_saying('content', make_vitals(uptime_sec=8 * DAY), rng) for _ in range(200)}
+        said_leafy = {piPet.pick_saying('content', make_vitals(uptime_sec=4 * DAY), rng) for _ in range(200)}
+        self.assertTrue(said_in_flower & set(piPet.PLANT_SAYINGS))
+        self.assertFalse(said_leafy & set(piPet.PLANT_SAYINGS))
 
 
 class AlertTest(unittest.TestCase):

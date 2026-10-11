@@ -78,6 +78,7 @@ SAYINGS = {
 CLAUDE_GREETING = 'oh hi Claude!'
 CLAUDE_SAYINGS = ['Claude is here!', 'hey Claude, look at my sky', 'Claude, wanna be friends?']
 GUARD_SAYINGS = ['the guard is on duty', 'no ads get past us', 'thanks for guarding, buddy']
+PLANT_SAYINGS = ['look, my plant bloomed!', 'a whole week without a reboot!']
 CHATTY_MOODS = ('content', 'busy', 'surfing')
 FRIEND_SAYING_CHANCE = 1 / 3
 
@@ -98,6 +99,16 @@ GUARD_ASLEEP = [
     [' _^_z', '(-_-)', '/[+]\\'],
     [' _^_Z', '(-_-)', '/[+]\\'],
 ]
+# The plant grows with uptime, so a reboot repots it. Stages: (days of uptime to reach it, lines from the top)
+POT = ('\\___/', 'pot')
+PLANT_STAGES = [
+    (0, [('  v  ', 'leaf'), POT]),  # sprout
+    (1, [('  v  ', 'leaf'), ('  |  ', 'leaf'), POT]),  # seedling
+    (3, [('  v  ', 'leaf'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # leafy
+    (7, [(' (@) ', 'berry'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # in flower
+]
+PLANT_OFFSET = 24  # columns from the pet's left edge, past the Zs, cloud and hearts
+
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
 
@@ -492,6 +503,20 @@ def build_pals(vitals, tick):
     return pals
 
 
+def plant_stage(uptime_sec):
+    """How far the plant has grown: 0 (sprout) to 3 (in flower), or None without an uptime reading."""
+    if uptime_sec is None:
+        return None
+    days = uptime_sec / 86400
+    return max(i for i, (min_days, _) in enumerate(PLANT_STAGES) if days >= min_days)
+
+
+def build_plant(uptime_sec):
+    """The potted plant as (text, color) lines from the top, or [] without an uptime reading."""
+    stage = plant_stage(uptime_sec)
+    return [] if stage is None else PLANT_STAGES[stage][1]
+
+
 def build_ground(width):
     """A line of grass across the window."""
     return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
@@ -500,7 +525,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -575,6 +600,13 @@ def layout(height, width, mood, tick, saying, vitals):
             add(feet_row - len(lines) + 1 + i, pal_left, line, color)
         pal_right = pal_left - 2
 
+    # The plant stands to the pet's right, past the extras, when there's room
+    plant = build_plant(vitals.uptime_sec)
+    plant_left = left + PLANT_OFFSET
+    if plant and plant_left + len(plant[0][0]) <= width - 1:
+        for i, (text, color) in enumerate(plant):
+            add(feet_row - len(plant) + 1 + i, plant_left, text, color)
+
     extras_color = 'berry' if mood == 'happy' else 'extra'  # red hearts
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
@@ -598,8 +630,10 @@ def layout(height, width, mood, tick, saying, vitals):
 
 
 def pick_saying(mood, vitals, rng=random):
-    """Something to say for this mood; calm moods sometimes talk to a pal instead."""
-    friend_sayings = (CLAUDE_SAYINGS if vitals.claude_here else []) + (GUARD_SAYINGS if vitals.adguard_running else [])
+    """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
+    friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
+                      + (GUARD_SAYINGS if vitals.adguard_running else [])
+                      + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else []))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
         return rng.choice(friend_sayings)
     return rng.choice(SAYINGS[mood])
@@ -673,6 +707,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'grass': curses.color_pair(1),
         'claude': curses.color_pair(4),
         'guard': curses.color_pair(5) | curses.A_BOLD,
+        'pot': curses.color_pair(4),
     }
 
     vitals = Vitals(forced_mood, interface)
