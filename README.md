@@ -39,7 +39,7 @@ Python 3 standard library only, so there's nothing to install.
 
 ```bash
 python3 piPet.py              # live: press p to pet it, q to quit
-python3 piPet.py --once       # print one frame and exit
+python3 piPet.py --once       # print a snapshot of the whole scene and exit (colored in a terminal; NO_COLOR=1 turns colors off)
 python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
 python3 piPet.py --help       # list the options
@@ -85,7 +85,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-85 standard-library tests, no sensors needed. They check:
+90 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -97,6 +97,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
 - the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
+- `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing

@@ -2,7 +2,7 @@
 """Pi Pet: a little raspberry that lives in your terminal and reacts to the Pi's real vitals.
 
     python3 piPet.py              # live: press p to pet it, q to quit
-    python3 piPet.py --once       # print one frame and exit (no curses)
+    python3 piPet.py --once       # print a snapshot of the scene and exit (no curses)
     python3 piPet.py --mood hot   # force a mood (--help lists them all)
     python3 piPet.py --iface eth0 # watch one network interface instead of following the default route
     python3 piPet.py --help       # list the options
@@ -14,6 +14,8 @@ import glob
 import math
 import os
 import random
+import shutil
+import sys
 import time
 
 FPS = 4
@@ -23,6 +25,16 @@ DEFAULT_INTERFACE = 'wlan0'  # used when there's no default route to follow
 PET_WIDTH = 13
 MIN_WIDTH = 24
 MIN_HEIGHT = 11
+
+# --once prints a snapshot at the terminal's size, capped so a big terminal doesn't get a page of blank rows
+ONCE_MAX_WIDTH = 80
+ONCE_MAX_HEIGHT = 24
+
+# --once colors, matching the live view's curses colors (ANSI SGR codes; '' means the terminal's default)
+ANSI_COLORS = {
+    'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
+    'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33',
+}
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
 SKY_HEIGHT = 3
@@ -522,7 +534,7 @@ def build_ground(width):
     return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
 
 
-def layout(height, width, mood, tick, saying, vitals):
+def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot. Nothing is placed on the bottom row
@@ -624,9 +636,40 @@ def layout(height, width, mood, tick, saying, vitals):
         last_row += 1
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
 
-    if last_row < height - 2:
+    if show_hint and last_row < height - 2:
         add(height - 2, 1, 'p to pet  ·  q to quit', 'dim')
     return cells
+
+
+def render_lines(cells, height, width, use_color=False):
+    """Turn layout cells into printable lines for --once, with ANSI colors if asked.
+
+    Blank rows at the top and bottom and trailing spaces are dropped.
+    """
+    grid = [[(' ', 'plain')] * width for _ in range(height)]
+    for row, col, text, color in cells:
+        for offset, char in enumerate(text):
+            grid[row][col + offset] = (char, color)
+
+    lines = []
+    for row in grid:
+        end = max((i + 1 for i, (char, _) in enumerate(row) if char != ' '), default=0)
+        parts, current = [], 'plain'
+        for char, color in row[:end]:
+            if use_color and char != ' ' and color != current:
+                code = ANSI_COLORS[color]
+                parts.append('\x1b[0m' + (f'\x1b[{code}m' if code else ''))
+                current = color
+            parts.append(char)
+        if use_color and current != 'plain':
+            parts.append('\x1b[0m')
+        lines.append(''.join(parts))
+
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines
 
 
 def pick_saying(mood, vitals, rng=random):
@@ -674,16 +717,13 @@ def print_once(forced_mood=None, interface=None):
     vitals.refresh()
     mood = vitals.mood()
 
-    for line in build_bubble(pick_saying(mood, vitals)):
+    columns, rows = shutil.get_terminal_size()  # 80x24 when the output is piped
+    width, height = min(columns, ONCE_MAX_WIDTH), min(rows, ONCE_MAX_HEIGHT)
+    cells = layout(height, width, mood, 1, pick_saying(mood, vitals), vitals, show_hint=False)
+    use_color = sys.stdout.isatty() and 'NO_COLOR' not in os.environ
+    for line in render_lines(cells, height, width, use_color):
         print(line)
-    for text, _ in build_pet(mood, tick=1):
-        print(text)
-    print()
     print(f'mood: {mood}')
-    print(build_status(vitals))
-    alerts = build_alerts(vitals)
-    if alerts:
-        print(alerts)
 
 
 def run_live(screen, forced_mood=None, interface=None):

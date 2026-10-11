@@ -8,7 +8,7 @@ Pi Pet is a terminal pet (a raspberry) whose mood, scene and visitors follow a R
 
 ```bash
 python3 piPet.py                       # live view (p to pet, q to quit)
-python3 piPet.py --once --mood dizzy   # print one frame and exit; --mood forces any key of FACES
+python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
 python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~7 s)
@@ -35,7 +35,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - Network speed comes from `update_net_rate()`. It skips readings closer than `MIN_RATE_SECONDS`, and it resets the measurement when the default-route interface changes.
   - `mood()` is an ordered priority chain: dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content. `happy` exists only for petting and `--mood`; the sensors never pick it.
 - **Builders** (`build_pet`, `build_extras`, `build_pals`, `build_plant`, `build_sky`, `build_bubble`, `build_status`, `build_alerts`) return text, or cells *relative to the pet's top-left corner*. They never know the window size, except `build_sky` and `build_ground`, which span the full width.
-- **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here, and `run_live` only paints the cells. Testing the drawing means calling `layout()`, never curses.
+- **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `run_live`'s curses `colors` dict and `ANSI_COLORS`; a test checks the ANSI side.
   - **When space runs out, things drop in this order:** scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.

@@ -4,6 +4,7 @@
 """
 
 import io
+import os
 import random
 import sys
 import unicodedata
@@ -489,6 +490,43 @@ class PlantTest(unittest.TestCase):
         said_leafy = {piPet.pick_saying('content', make_vitals(uptime_sec=4 * DAY), rng) for _ in range(200)}
         self.assertTrue(said_in_flower & set(piPet.PLANT_SAYINGS))
         self.assertFalse(said_leafy & set(piPet.PLANT_SAYINGS))
+
+
+class OnceTest(unittest.TestCase):
+    def test_render_lines_places_text_and_trims_blank_space(self):
+        cells = [(1, 2, 'hi', 'plain'), (3, 0, 'there', 'leaf')]
+        self.assertEqual(piPet.render_lines(cells, height=6, width=10), ['  hi', '', 'there'])
+
+    def test_render_lines_colors_only_when_asked(self):
+        cells = [(0, 0, 'ab', 'leaf'), (0, 3, 'c', 'plain')]
+        self.assertEqual(piPet.render_lines(cells, 1, 10), ['ab c'])
+        self.assertEqual(piPet.render_lines(cells, 1, 10, use_color=True), ['\x1b[0m\x1b[1;32mab \x1b[0mc'])
+
+    def test_every_layout_color_has_an_ansi_code(self):
+        colors = set()
+        for mood in piPet.FACES:
+            for hour, running in ((12.0, True), (22.0, False)):
+                vitals = make_vitals(hour=hour, claude_here=True, adguard_running=running, uptime_sec=8 * DAY, online=False)
+                colors |= {color for *_, color in piPet.layout(24, 80, mood, 1, 'hi', vitals)}
+        self.assertLessEqual(colors, set(piPet.ANSI_COLORS))
+
+    def test_no_key_hint_when_asked(self):
+        texts = [text for _, _, text, _ in piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_hint=False)]
+        self.assertFalse(any('q to quit' in text for text in texts))
+
+    def test_print_once_shows_the_whole_scene(self):
+        vitals = make_vitals(hour=12.0, claude_here=True, adguard_running=True, uptime_sec=8 * DAY)
+        vitals.refresh = lambda: None
+        with mock.patch.object(piPet, 'Vitals', return_value=vitals), \
+                mock.patch.object(piPet.time, 'sleep'), \
+                mock.patch.object(piPet.shutil, 'get_terminal_size', return_value=os.terminal_size((80, 24))), \
+                mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout:
+            piPet.print_once()
+        output = stdout.getvalue()
+        for piece in ('-O-', '\\\\|//', '-^‿^-', '(o_o)', '(@)', "_.,_'", 'temp ', 'mood: content'):
+            self.assertIn(piece, output)
+        self.assertNotIn('q to quit', output)
+        self.assertNotIn('\x1b[', output, 'no colors when the output is not a terminal')
 
 
 class AlertTest(unittest.TestCase):
