@@ -45,7 +45,7 @@ python3 piPet.py --iface eth0 # watch one network interface (default: whichever 
 python3 piPet.py --help       # list the options
 ```
 
-In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon), then a `C` moon crosses among twinkling stars until morning. On the grass, bouncing pets hop up instead of down.
+In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above), then a `C` moon crosses among twinkling stars until morning. On the grass, bouncing pets hop up instead of down.
 
 ## Friends
 
@@ -85,7 +85,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-90 standard-library tests, no sensors needed. They check:
+95 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -97,6 +97,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
 - the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
+- the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
@@ -114,6 +115,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Memory | `MemAvailable` ÷ `MemTotal` in `/proc/meminfo` |
 | Uptime (groggy, the plant) | `/proc/uptime` |
 | Time of day | the Pi's local clock (`time.localtime()`) |
+| Clouds | the 1-minute load, same as busy |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
 | AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs |
 | Online | a default route in `/proc/net/route` |

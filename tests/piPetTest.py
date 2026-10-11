@@ -492,6 +492,53 @@ class PlantTest(unittest.TestCase):
         self.assertFalse(said_leafy & set(piPet.PLANT_SAYINGS))
 
 
+class CloudTest(unittest.TestCase):
+    def clouds(self, cells):
+        return [cell for cell in cells if cell[3] == 'cloud']
+
+    def test_busier_cpu_means_more_clouds(self):
+        for load, count in ((0.0, 1), (0.49, 1), (0.5, 2), (1.49, 2), (1.5, 3), (4.0, 3)):
+            with self.subTest(load=load):
+                self.assertEqual(piPet.cloud_count(load), count)
+
+    def test_clouds_only_by_day(self):
+        self.assertTrue(self.clouds(piPet.build_sky(80, 12.0, 100, load=3)))
+        self.assertFalse(self.clouds(piPet.build_sky(80, 22.0, 100, load=3)))
+
+    def test_clouds_drift_right_and_wrap_around(self):
+        def right_edge(tick):
+            # One cloud when idle; its bottom line's right edge stays correct even when the left edge is cut off
+            edges = [col + len(text) for row, col, text, _ in piPet.build_clouds(80, 0.0, tick) if row == 1]
+            return edges[0] if edges else None
+        start = right_edge(0)
+        self.assertEqual(right_edge(piPet.CLOUD_TICKS_PER_COLUMN), start + 1)
+        self.assertEqual(right_edge(piPet.CLOUD_TICKS_PER_COLUMN - 1), start)
+        edges = [edge for edge in (right_edge(t) for t in range(0, 2000, piPet.CLOUD_TICKS_PER_COLUMN)) if edge is not None]
+        self.assertTrue(any(later < earlier for earlier, later in zip(edges, edges[1:])), 'should wrap back to the left')
+
+    def test_sky_never_overlaps_or_spills_over_a_long_day(self):
+        sun_hidden = False
+        for width in (40, 80, 120):
+            for load in (0.0, 1.0, 3.0):
+                for hour in (6.5, 9.0, 12.0, 15.0, 17.5):
+                    for tick in range(0, 1200, 15):
+                        cells = piPet.build_sky(width, hour, tick, load)
+                        seen = set()
+                        for row, col, text, _ in cells:
+                            with self.subTest(width=width, load=load, hour=hour, tick=tick, text=text):
+                                self.assertTrue(0 <= row < piPet.SKY_HEIGHT and col >= 0)
+                                for offset, char in enumerate(text):
+                                    self.assertNotIn((row, col + offset), seen)
+                                    seen.add((row, col + offset))
+                        sun_hidden |= not any(color == 'sun' for *_, color in cells)
+        self.assertTrue(sun_hidden, 'clouds should pass in front of the sun sometimes')
+
+    def test_cloud_shapes_are_one_column_characters(self):
+        for shape in piPet.CLOUD_SHAPES:
+            for char in ''.join(shape):
+                self.assertTrue(is_one_column(char))
+
+
 class OnceTest(unittest.TestCase):
     def test_render_lines_places_text_and_trims_blank_space(self):
         cells = [(1, 2, 'hi', 'plain'), (3, 0, 'there', 'leaf')]

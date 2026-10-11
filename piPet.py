@@ -33,13 +33,15 @@ ONCE_MAX_HEIGHT = 24
 # --once colors, matching the live view's curses colors (ANSI SGR codes; '' means the terminal's default)
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
-    'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33',
+    'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
 SKY_HEIGHT = 3
 SCENE_MIN_WIDTH = 40
 GROUND_PATTERN = "_.,_'_,."
+CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
+CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
@@ -476,8 +478,38 @@ def build_extras(mood, tick):
     return []
 
 
-def build_sky(width, hour, tick):
-    """The sky across the top of the window as (row, col, text, color): a sun by day, a moon and stars by night.
+def cloud_count(load):
+    """The busier the CPU, the cloudier the day: 1 cloud when idle, up to 3."""
+    if load < 0.5:
+        return 1
+    return 2 if load < 1.5 else 3
+
+
+def build_clouds(width, load, tick):
+    """Clouds drifting left to right across the sky as (row, col, text, color), wrapping around.
+
+    They all move at the same speed from evenly spaced starts, so they never run into each other.
+    """
+    count = cloud_count(load)
+    period = width + max(len(shape[-1]) for shape in CLOUD_SHAPES)
+    cells = []
+    for i in range(count):
+        shape = CLOUD_SHAPES[i % len(CLOUD_SHAPES)]
+        cloud_width = len(shape[-1])
+        start = period // 4 + i * period // count
+        cloud_left = (start + tick // CLOUD_TICKS_PER_COLUMN) % period - cloud_width
+        for line_no, text in enumerate(shape):
+            col = cloud_left + (cloud_width - len(text)) // 2
+            if col < 0:
+                text, col = text[-col:], 0  # drifting in from the left edge
+            if text:
+                cells.append((i % 2 + line_no, col, text, 'cloud'))
+    return cells
+
+
+def build_sky(width, hour, tick, load=0.0):
+    """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
+    a moon and stars by night.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     """
@@ -496,6 +528,12 @@ def build_sky(width, hour, tick):
                 continue  # behind the moon
             twinkle = (tick // 4 + i) % 5 == 0
             cells.append((row, col, '*' if twinkle else '.', 'plain'))
+    if daytime:
+        cells += build_clouds(width, load, tick)
+        behind_a_cloud = any(row == body_row and col < body_col + len(body) and body_col < col + len(text)
+                             for row, col, text, _ in cells)
+        if behind_a_cloud:
+            return cells
     cells.append((body_row, body_col, body, 'sun' if daytime else 'moon'))
     return cells
 
@@ -537,7 +575,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot, cloud. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -579,7 +617,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
-        for row, col, text, color in build_sky(width, vitals.hour, tick):
+        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load):
             add(row, col, text, color)
     else:
         top = (usable - block_height) // 2
@@ -748,6 +786,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'claude': curses.color_pair(4),
         'guard': curses.color_pair(5) | curses.A_BOLD,
         'pot': curses.color_pair(4),
+        'cloud': 0,  # the terminal's own text color, so clouds show on light and dark themes
     }
 
     vitals = Vitals(forced_mood, interface)

@@ -11,7 +11,7 @@ python3 piPet.py                       # live view (p to pet, q to quit)
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
-python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~7 s)
+python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~8 s)
 python3 -m unittest discover -s tests -p "*Test.py" -k SceneTest   # one class
 python3 -m unittest discover -s tests -p "*Test.py" -k test_status_line_always_shows   # one test
 ```
@@ -63,7 +63,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
 
 - `make_vitals(...)` in `tests/piPetTest.py` builds a `Vitals` with `object.__new__`, which bypasses the real sensors. Its defaults describe a healthy Pi. **Any new `Vitals` attribute must be added there** with a healthy default, or a dozen tests fail with `AttributeError`.
 - Sensor readers are tested with `mock.patch('builtins.open', ...)`, `mock.mock_open(read_data=...)` and patched `glob.glob`/`os.statvfs`, not with real files.
-- New sweep coverage belongs in the existing `all_layouts` and `SceneTest` loops, through the `make_vitals` arguments they pass. Don't add separate sweeps; they already take ~6 s.
+- New sweep coverage belongs in the existing `all_layouts` and `SceneTest` loops, through the `make_vitals` arguments they pass. Don't add separate full-`layout()` sweeps; they already take ~6 s. (`CloudTest` sweeps only `build_sky`, which is cheap.)
 
 ## Conventions
 
