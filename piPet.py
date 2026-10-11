@@ -34,7 +34,7 @@ ONCE_MAX_HEIGHT = 24
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
     'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '', 'doctor': '1',
-    'sunset': '1;31', 'shooting_star': '1;33',
+    'sunset': '1;31', 'shooting_star': '1;33', 'planet': '35',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
@@ -47,6 +47,8 @@ MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycl
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
 CLOUD_TICKS_PER_COLUMN = 8
+PLANET = '-()-'  # a ringed planet: decorative, not a real planet's position
+PLANET_DRIFT = 3  # columns per day; like a real planet it stays put all night and shifts night to night
 SHOOTING_STAR_WINDOW = FPS * 60  # each minute of night has one chance of a shooting star...
 SHOOTING_STAR_CHANCE = 1 / 3     # ...so about one every three minutes
 SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
@@ -321,6 +323,7 @@ class Vitals:
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.moon_age = moon_age_days(time.time())
+        self.day_of_year = now.tm_yday  # moves the planet a little each night
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -610,10 +613,17 @@ def build_shooting_star(width, tick, seed):
     return row, col, text
 
 
-def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0):
+def planet_spot(width, day_of_year):
+    """Where the ringed planet sits tonight: the same all night, 3 columns further along each day."""
+    row = day_of_year // 10 % SKY_HEIGHT
+    col = day_of_year * PLANET_DRIFT % (width - len(PLANET))
+    return row, col
+
+
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
-    the moon in its real phase, stars and the odd shooting star by night, and a red sun, glowing
-    clouds and the first (or last) stars at dusk and dawn.
+    the moon in its real phase, a ringed planet, stars and the odd shooting star by night, and a red
+    sun, glowing clouds and the first (or last) stars at dusk and dawn.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -640,10 +650,13 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
     else:
         if body:
             place(body_row, body_col, body, 'moon')
+        row, col = planet_spot(width, day_of_year)
+        if not any((row, near) in taken for near in range(col - 1, col + len(PLANET) + 1)):  # else behind the moon
+            place(row, col, PLANET, 'planet')
         streak = build_shooting_star(width, tick, seed)
         if streak:
             row, col, text = streak
-            if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon
+            if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon or planet
                 place(row, col, text, 'shooting_star')
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
@@ -699,8 +712,8 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, shooting_star, grass, claude,
-    guard, pot, cloud, doctor. Nothing is placed on the bottom row or in the last column, because
+    Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
+    claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row or in the last column, because
     curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -742,7 +755,8 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
-        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed):
+        sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year)
+        for row, col, text, color in sky:
             add(row, col, text, color)
     else:
         top = (usable - block_height) // 2
@@ -899,6 +913,7 @@ def run_live(screen, forced_mood=None, interface=None):
     curses.init_pair(3, curses.COLOR_CYAN, -1)
     curses.init_pair(4, curses.COLOR_YELLOW, -1)
     curses.init_pair(5, curses.COLOR_BLUE, -1)
+    curses.init_pair(6, curses.COLOR_MAGENTA, -1)
     colors = {
         'leaf': curses.color_pair(1) | curses.A_BOLD,
         'berry': curses.color_pair(2) | curses.A_BOLD,
@@ -916,6 +931,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'doctor': curses.A_BOLD,  # a white coat, in the terminal's own text color
         'sunset': curses.color_pair(2) | curses.A_BOLD,  # 8-color terminals have no orange
         'shooting_star': curses.color_pair(4) | curses.A_BOLD,
+        'planet': curses.color_pair(6),
     }
 
     vitals = Vitals(forced_mood, interface)

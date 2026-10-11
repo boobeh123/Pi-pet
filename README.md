@@ -45,7 +45,7 @@ python3 piPet.py --iface eth0 # watch one network interface (default: whichever 
 python3 piPet.py --help       # list the options
 ```
 
-In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky. On the grass, bouncing pets hop up instead of down.
+In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky. A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
 
 ## Friends
 
@@ -86,7 +86,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-115 standard-library tests, no sensors needed. They check:
+119 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -101,6 +101,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
 - the moon: the formula against the 2024-04-08 eclipse (new moon) and the 2024-04-23 full moon, its shape through the month, and new moon nights having no moon and more stars
 - dawn and dusk: how deep into twilight each hour is, the red sun and glowing clouds, stars coming out at dusk and fading at dawn, and the dusk stars being the first stars of the night
+- the planet: one at night and none by day, staying put all night, drifting and wrapping day by day, and hiding behind the moon
 - shooting stars: about one every three minutes, crossing and falling over 1.5 seconds, a different schedule each run, night only, and never overlapping the moon or stars
 - the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
@@ -121,6 +122,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Uptime (groggy, the plant) | `/proc/uptime` |
 | Time of day | the Pi's local clock (`time.localtime()`) |
 | Clouds | the 1-minute load, same as busy |
+| Planet | the day of the year (decorative) |
 | Moon phase | days since a known new moon (2000-01-06 18:14 UTC) modulo the 29.53-day lunar month; good to about a day |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
 | Pi Vitals doctor | a socket listening on port 3141 in `/proc/net/tcp` or `tcp6` (read only, never connects) |

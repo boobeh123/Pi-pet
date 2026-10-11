@@ -22,7 +22,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0):
+                moon_age=14.8, sky_seed=0, day_of_year=200):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -42,6 +42,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.pi_vitals_running = pi_vitals_running
     vitals.moon_age = moon_age
     vitals.sky_seed = sky_seed
+    vitals.day_of_year = day_of_year
     return vitals
 
 
@@ -271,6 +272,7 @@ class SceneTest(unittest.TestCase):
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
                                              make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
                                                          pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
+                                                         day_of_year=tick * 15,
                                                          adguard_running=tick % 2 == 0))  # guard awake or asleep
                         seen = set()
                         for row, col, text, _ in cells:
@@ -565,6 +567,39 @@ class TwilightTest(unittest.TestCase):
                 self.assertEqual(piPet.star_spots(width, width // 8), night, 'the same width gives the same stars')
 
 
+class PlanetTest(unittest.TestCase):
+    def planets(self, hour=22.0, day=100, width=80, moon_age=0.2, tick=0):
+        return [(row, col, text) for row, col, text, color in piPet.build_sky(width, hour, tick, moon_age=moon_age,
+                                                                          day_of_year=day) if color == 'planet']
+
+    def test_one_planet_at_night_none_by_day(self):
+        self.assertEqual([text for *_, text in self.planets()], ['-()-'])
+        self.assertEqual(self.planets(hour=12.0), [])
+        self.assertEqual(self.planets(hour=17.9), [], 'not at dusk either; it comes out with the night')
+
+    def test_stays_put_all_night(self):
+        spots = {tuple(self.planets(hour=hour, tick=tick)) for hour in (18.5, 22.0, 2.0, 5.5) for tick in (0, 50, 999)}
+        self.assertEqual(len(spots), 1)
+
+    def test_drifts_a_little_each_day_and_wraps(self):
+        cols = [piPet.planet_spot(80, day)[1] for day in range(1, 60)]
+        steps = [later - earlier for earlier, later in zip(cols, cols[1:])]
+        self.assertIn(piPet.PLANET_DRIFT, steps)
+        self.assertTrue(any(step < 0 for step in steps), 'should wrap back to the left')
+        self.assertTrue(all(0 <= col <= 80 - 1 - len(piPet.PLANET) for col in cols))
+
+    def test_hides_behind_the_moon(self):
+        # Find a night where the full moon sits on the planet's spot
+        for day in range(366):
+            row, col = piPet.planet_spot(80, day)
+            moon = [(r, c) for r, c, _, color in piPet.build_sky(80, 22.0, 0, moon_age=14.8, day_of_year=day)
+                    if color == 'moon']
+            if moon and moon[0][0] == row and col - 1 <= moon[0][1] <= col + len(piPet.PLANET):
+                self.assertEqual(self.planets(day=day, moon_age=14.8), [])
+                return
+        self.fail('expected the moon to pass the planet at least once in a year')
+
+
 class ShootingStarTest(unittest.TestCase):
     WINDOWS = 300
 
@@ -611,7 +646,7 @@ class ShootingStarTest(unittest.TestCase):
             for moon_age in (0.2, 7.4, 14.8):
                 for hour in (19.0, 0.0, 4.5):
                     for tick in self.streak_ticks(seed=width, windows=40, width=width):
-                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width)
+                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width, day_of_year=tick % 366)
                         drawn += any(color == 'shooting_star' for *_, color in cells)
                         seen = set()
                         for row, col, text, _ in cells:
