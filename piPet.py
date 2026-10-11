@@ -34,6 +34,7 @@ ONCE_MAX_HEIGHT = 24
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
     'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '', 'doctor': '1',
+    'sunset': '1;31',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
@@ -44,6 +45,7 @@ SYNODIC_MONTH_DAYS = 29.530588853  # new moon to new moon
 KNOWN_NEW_MOON = 947182440  # 2000-01-06 18:14 UTC
 MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycle; None is the new moon
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
+TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
 CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 
 # Thresholds that decide the pet's mood
@@ -552,38 +554,69 @@ def build_clouds(width, load, tick):
     return cells
 
 
+def twilight_strength(hour):
+    """How deep into twilight it is: 0 in full daylight or at night, rising to 1 through the last hour
+    before sunset (17-18) and falling from 1 through the first hour after sunrise (6-7)."""
+    if 17 <= hour < 18:
+        return hour - 17
+    if 6 <= hour < 7:
+        return 7 - hour
+    return 0.0
+
+
+def star_spots(width, count):
+    """Where the stars are, as (row, col) in the order they come out.
+
+    The same width always gives the same stars, and a smaller count gives the first few of a bigger
+    one, so stars come out at dusk and fade at dawn in place instead of jumping around.
+    """
+    rng = random.Random(width)
+    spots = []
+    for _ in range(count):
+        spot = (rng.randrange(SKY_HEIGHT), rng.randrange(width - 1))
+        if spot not in spots:
+            spots.append(spot)
+    return spots
+
+
 def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
-    the moon in its real phase and stars by night.
+    the moon in its real phase and stars by night, and a red sun, glowing clouds and the first
+    (or last) stars at dusk and dawn.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
     """
     daytime = 6 <= hour < 18
+    twilight = twilight_strength(hour)
     progress = ((hour - 6) % 12) / 12  # 0 at sunrise or sunset, 1 twelve hours later
     body = '-O-' if daytime else moon_glyph(moon_age)  # None on a new moon night
     body_col = round(progress * (width - 1 - len(body or ' ')))
     body_row = round((SKY_HEIGHT - 1) * (1 - math.sin(math.pi * progress)))
 
-    cells = []
-    if not daytime:
-        rng = random.Random(width)  # the same stars for the same window width, so they don't jump around
-        # A new moon night is darker, so more stars show; the extras are added after the usual ones
-        star_count = width // 5 if body is None else width // 8
-        spots = {(rng.randrange(SKY_HEIGHT), rng.randrange(width - 1)) for _ in range(star_count)}
-        for i, (row, col) in enumerate(sorted(spots)):
-            if body and row == body_row and body_col - 1 <= col <= body_col + len(body):
-                continue  # behind the moon
-            twinkle = (tick // 4 + i) % 5 == 0
-            cells.append((row, col, '*' if twinkle else '.', 'plain'))
+    cells, taken = [], set()
+
+    def place(row, col, text, color):
+        cells.append((row, col, text, color))
+        taken.update((row, col + offset) for offset in range(len(text)))
+
     if daytime:
-        cells += build_clouds(width, load, tick)
-        behind_a_cloud = any(row == body_row and col < body_col + len(body) and body_col < col + len(text)
-                             for row, col, text, _ in cells)
-        if behind_a_cloud:
-            return cells
-    if body:
-        cells.append((body_row, body_col, body, 'sun' if daytime else 'moon'))
+        for row, col, text, _ in build_clouds(width, load, tick):
+            place(row, col, text, 'sunset' if twilight else 'cloud')  # clouds glow at sunrise and sunset
+        if not any((body_row, body_col + offset) in taken for offset in range(len(body))):  # else behind a cloud
+            place(body_row, body_col, body, 'sunset' if twilight else 'sun')
+        star_count = int(width // 8 * TWILIGHT_STAR_SHARE * twilight)
+    else:
+        if body:
+            place(body_row, body_col, body, 'moon')
+        # A new moon night is darker, so more stars show; the extras come out after the usual ones
+        star_count = width // 5 if body is None else width // 8
+
+    for i, (row, col) in enumerate(star_spots(width, star_count)):
+        if any((row, near) in taken for near in (col - 1, col, col + 1)):
+            continue  # behind (or right beside) the sun, the moon or a cloud
+        twinkle = (tick // 4 + i) % 5 == 0
+        cells.append((row, col, '*' if twinkle else '.', 'plain'))
     return cells
 
 
@@ -630,7 +663,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, grass, claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -844,6 +877,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'pot': curses.color_pair(4),
         'cloud': 0,  # the terminal's own text color, so clouds show on light and dark themes
         'doctor': curses.A_BOLD,  # a white coat, in the terminal's own text color
+        'sunset': curses.color_pair(2) | curses.A_BOLD,  # 8-color terminals have no orange
     }
 
     vitals = Vitals(forced_mood, interface)

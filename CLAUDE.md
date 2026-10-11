@@ -11,7 +11,7 @@ python3 piPet.py                       # live view (p to pet, q to quit)
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
-python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~8 s)
+python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~10 s)
 python3 -m unittest discover -s tests -p "*Test.py" -k SceneTest   # one class
 python3 -m unittest discover -s tests -p "*Test.py" -k test_status_line_always_shows   # one test
 ```

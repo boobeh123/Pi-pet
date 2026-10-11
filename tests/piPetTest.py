@@ -526,6 +526,44 @@ class MoonTest(unittest.TestCase):
         self.assertEqual([text for *_, text, color in cells if color == 'moon'], ['D'])
 
 
+class TwilightTest(unittest.TestCase):
+    def stars(self, hour, width=80):
+        return [(row, col) for row, col, _, color in piPet.build_sky(width, hour, 0) if color == 'plain']
+
+    def colors(self, hour, load=3.0, tick=0):
+        return {color for *_, color in piPet.build_sky(80, hour, tick, load)}
+
+    def test_twilight_strength(self):
+        cases = [(12.0, 0), (17.0, 0), (17.5, 0.5), (6.0, 1), (6.5, 0.5), (7.0, 0), (22.0, 0), (3.0, 0)]
+        for hour, strength in cases:
+            with self.subTest(hour=hour):
+                self.assertAlmostEqual(piPet.twilight_strength(hour), strength)
+
+    def test_red_sun_and_glowing_clouds_at_sunrise_and_sunset(self):
+        for hour in (6.5, 17.5):
+            with self.subTest(hour=hour):
+                colors = set().union(*(self.colors(hour, tick=tick) for tick in range(0, 400, 40)))
+                self.assertIn('sunset', colors)
+                self.assertFalse(colors & {'sun', 'cloud'})
+        noon = set().union(*(self.colors(12.0, tick=tick) for tick in range(0, 400, 40)))
+        self.assertNotIn('sunset', noon)
+
+    def test_stars_come_out_at_dusk_and_fade_at_dawn(self):
+        self.assertEqual(self.stars(12.0), [])
+        self.assertEqual(self.stars(17.0), [])
+        self.assertGreater(len(self.stars(17.95)), 0)
+        self.assertGreaterEqual(len(self.stars(17.95)), len(self.stars(17.4)))
+        self.assertGreaterEqual(len(self.stars(6.05)), len(self.stars(6.6)))
+        self.assertEqual(self.stars(7.0), [])
+
+    def test_dusk_stars_are_the_first_stars_of_the_night(self):
+        for width in (40, 80, 120):
+            night = piPet.star_spots(width, width // 8)
+            with self.subTest(width=width):
+                self.assertEqual(piPet.star_spots(width, 2), night[:2])
+                self.assertEqual(piPet.star_spots(width, width // 8), night, 'the same width gives the same stars')
+
+
 class CloudTest(unittest.TestCase):
     def clouds(self, cells):
         return [cell for cell in cells if cell[3] == 'cloud']
@@ -554,8 +592,8 @@ class CloudTest(unittest.TestCase):
         sun_hidden = False
         for width in (40, 80, 120):
             for load in (0.0, 1.0, 3.0):
-                for hour in (6.5, 9.0, 12.0, 15.0, 17.5):
-                    for tick in range(0, 1200, 15):
+                for hour in (6.1, 6.5, 9.0, 12.0, 15.0, 17.5, 17.9):  # includes dawn and dusk, with stars
+                    for tick in range(0, 1200, 25):
                         cells = piPet.build_sky(width, hour, tick, load)
                         seen = set()
                         for row, col, text, _ in cells:
