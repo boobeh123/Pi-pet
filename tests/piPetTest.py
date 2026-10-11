@@ -4,6 +4,7 @@
 """
 
 import io
+import random
 import sys
 import unicodedata
 import unittest
@@ -17,7 +18,8 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
-                disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0):
+                disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
+                claude_here=False):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -32,6 +34,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.uptime_sec = uptime_sec
     vitals.online = online
     vitals.hour = hour
+    vitals.claude_here = claude_here
     return vitals
 
 
@@ -122,7 +125,7 @@ class LayoutTest(unittest.TestCase):
     SIZES = [(24, 80), (40, 120), (14, 30), (12, 40), (11, 24)]  # (height, width), down to the minimum
 
     def all_layouts(self, sizes=SIZES):
-        vitals = make_vitals()
+        vitals = make_vitals(claude_here=True)  # with a pal visiting, wherever there's room
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -257,7 +260,8 @@ class SceneTest(unittest.TestCase):
             for hour in (0.0, 7.0, 12.0, 17.9, 18.0, 23.5):
                 for mood in piPet.FACES:
                     for tick in TICKS:
-                        cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1], make_vitals(hour=hour))
+                        cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
+                                             make_vitals(hour=hour, claude_here=True))
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -315,6 +319,73 @@ class SceneTest(unittest.TestCase):
         (bubble_rest, leaf_rest), (bubble_hop, leaf_hop) = bubble_and_leaf_rows(1), bubble_and_leaf_rows(2)
         self.assertEqual(bubble_rest, bubble_hop)
         self.assertEqual(leaf_hop, leaf_rest - 1)
+
+
+class ClaudePalTest(unittest.TestCase):
+    def fake_processes(self, names):
+        paths = [f'/proc/{100 + i}/comm' for i in range(len(names))]
+
+        def fake_open(path, *args, **kwargs):
+            name = names[paths.index(path)]
+            if name is None:
+                raise FileNotFoundError(path)  # the process ended while we looked
+            return io.StringIO(name + '\n')
+
+        return mock.patch.object(piPet.glob, 'glob', return_value=paths), mock.patch('builtins.open', side_effect=fake_open)
+
+    def test_finds_a_claude_process(self):
+        for names, expected in ((['bash', None, 'claude'], True), (['bash', 'node', 'claude-helper'], False), ([], False)):
+            patch_glob, patch_open = self.fake_processes(names)
+            with self.subTest(names=names), patch_glob, patch_open:
+                self.assertIs(piPet.is_claude_running(), expected)
+
+    def test_pal_frames_line_up(self):
+        for frame in piPet.CLAUDE_PAL:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+
+    def pal_cells(self, height=24, width=80, mood='content', tick=1, here=True):
+        cells = piPet.layout(height, width, mood, tick, 'hi', make_vitals(claude_here=here))
+        return cells, [(row, col, text) for row, col, text, color in cells if color == 'claude']
+
+    def test_pal_visits_only_while_claude_is_here(self):
+        self.assertEqual(len(self.pal_cells()[1]), 3)
+        self.assertEqual(self.pal_cells(here=False)[1], [])
+
+    def test_pal_stands_on_the_ground_left_of_the_pet(self):
+        for mood in piPet.FACES:
+            cells, pal = self.pal_cells(mood=mood)
+            pet_cols = [col for _, col, _, color in cells if color in ('leaf', 'berry')]
+            ground_row = next(row for row, _, _, color in cells if color == 'grass')
+            with self.subTest(mood=mood):
+                self.assertEqual(max(row for row, _, _ in pal), ground_row - 1)
+                self.assertLess(max(col + len(text) for _, col, text in pal), min(pet_cols))
+
+    def test_no_room_no_pal(self):
+        self.assertEqual(self.pal_cells(height=piPet.MIN_HEIGHT, width=piPet.MIN_WIDTH)[1], [])
+
+    def test_pal_twinkles(self):
+        looks = {tuple(text for _, _, text in self.pal_cells(tick=tick)[1]) for tick in TICKS}
+        self.assertEqual(len(looks), 2)
+
+    def test_chatty_moods_sometimes_talk_to_claude(self):
+        rng = random.Random(1)
+        said = {piPet.pick_saying('content', make_vitals(claude_here=True), rng) for _ in range(200)}
+        self.assertTrue(said & set(piPet.CLAUDE_SAYINGS))
+        self.assertTrue(said & set(piPet.SAYINGS['content']))
+
+    def test_no_claude_talk_when_alone_or_urgent(self):
+        rng = random.Random(1)
+        for mood, here in (('content', False), ('dizzy', True), ('lonely', True), ('sleepy', True)):
+            said = {piPet.pick_saying(mood, make_vitals(claude_here=here), rng) for _ in range(100)}
+            with self.subTest(mood=mood, here=here):
+                self.assertTrue(said <= set(piPet.SAYINGS[mood]))
+
+    def test_friend_sayings_fit(self):
+        for saying in piPet.CLAUDE_SAYINGS + [piPet.CLAUDE_GREETING]:
+            for char in ''.join(piPet.build_bubble(saying)):
+                self.assertTrue(is_one_column(char))
 
 
 class AlertTest(unittest.TestCase):

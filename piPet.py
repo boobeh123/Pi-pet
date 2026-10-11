@@ -74,6 +74,18 @@ SAYINGS = {
     'happy': ['hehe!', 'more please', 'that tickles!', 'best human ever'],
 }
 
+# Friends who visit, and what the pet says to them. Only calm moods chat; urgent ones stick to their own news.
+CLAUDE_GREETING = 'oh hi Claude!'
+CLAUDE_SAYINGS = ['Claude is here!', 'hey Claude, look at my sky', 'Claude, wanna be friends?']
+CHATTY_MOODS = ('content', 'busy', 'surfing')
+FRIEND_SAYING_CHANCE = 1 / 3
+
+# Pals are drawn as frames of equal-width lines; every character one column wide, like the pet
+CLAUDE_PAL = [
+    [' \\|/ ', '-^‿^-', ' /|\\ '],
+    [' .|. ', '-^‿^-', " '|' "],  # twinkle
+]
+
 
 # ---------------------------------------------------------------------------
 # Reading the Pi
@@ -186,6 +198,18 @@ def read_uptime_sec():
         return None
 
 
+def is_claude_running():
+    """True if a Claude Code session is running on this machine (a process named claude)."""
+    for comm_path in glob.glob('/proc/[0-9]*/comm'):
+        try:
+            with open(comm_path) as f:
+                if f.read().strip() == 'claude':
+                    return True
+        except OSError:
+            continue  # the process ended while we looked
+    return False
+
+
 class Vitals:
     """Polls the sensors and works out network speed between polls."""
 
@@ -207,6 +231,7 @@ class Vitals:
         self.disk_used_percent = read_disk_used_percent()
         self.uptime_sec = read_uptime_sec()
         self.online = get_default_interface() is not None
+        self.claude_here = is_claude_running()
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.update_net_rate()
@@ -429,6 +454,14 @@ def build_sky(width, hour, tick):
     return cells
 
 
+def build_pals(vitals, tick):
+    """The pals visiting right now, nearest the pet first, as (lines, color) for this frame."""
+    pals = []
+    if vitals.claude_here:
+        pals.append((CLAUDE_PAL[tick // 4 % 2], 'claude'))  # twinkles about once a second
+    return pals
+
+
 def build_ground(width):
     """A line of grass across the window."""
     return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
@@ -437,7 +470,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -501,6 +534,17 @@ def layout(height, width, mood, tick, saying, vitals):
     drawn_top = pet_top + (0 if not bounced else -1 if show_scene else 1)
     for i, (text, color) in enumerate(pet):
         add(drawn_top + i, left, text, color)
+    # Pals stand to the pet's left with their feet level with its feet, as many as fit
+    feet_row = pet_top + pet_height - 1
+    pal_right = left - 2
+    for lines, color in build_pals(vitals, tick):
+        pal_left = pal_right - len(lines[0])
+        if pal_left < 0:
+            break
+        for i, line in enumerate(lines):
+            add(feet_row - len(lines) + 1 + i, pal_left, line, color)
+        pal_right = pal_left - 2
+
     extras_color = 'berry' if mood == 'happy' else 'extra'  # red hearts
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
@@ -521,6 +565,13 @@ def layout(height, width, mood, tick, saying, vitals):
     if last_row < height - 2:
         add(height - 2, 1, 'p to pet  ·  q to quit', 'dim')
     return cells
+
+
+def pick_saying(mood, vitals, rng=random):
+    """Something to say for this mood; calm moods sometimes talk to a visiting friend instead."""
+    if vitals.claude_here and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
+        return rng.choice(CLAUDE_SAYINGS)
+    return rng.choice(SAYINGS[mood])
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +609,7 @@ def print_once(forced_mood=None, interface=None):
     vitals.refresh()
     mood = vitals.mood()
 
-    for line in build_bubble(random.choice(SAYINGS[mood])):
+    for line in build_bubble(pick_saying(mood, vitals)):
         print(line)
     for text, _ in build_pet(mood, tick=1):
         print(text)
@@ -588,14 +639,16 @@ def run_live(screen, forced_mood=None, interface=None):
         'sun': curses.color_pair(4) | curses.A_BOLD,
         'moon': curses.A_BOLD,
         'grass': curses.color_pair(1),
+        'claude': curses.color_pair(4),
     }
 
     vitals = Vitals(forced_mood, interface)
     tick = 0
     mood = vitals.mood()
-    saying = random.choice(SAYINGS[mood])
+    saying = CLAUDE_GREETING if vitals.claude_here else pick_saying(mood, vitals)
     petted_until = 0
     was_petted = False
+    claude_was_here = vitals.claude_here
 
     while True:
         key = screen.getch()
@@ -611,11 +664,15 @@ def run_live(screen, forced_mood=None, interface=None):
         if tick % (FPS * 2) == 0:
             vitals.refresh()
             new_mood = vitals.mood()
-            if not petted and (new_mood != mood or tick % (FPS * 10) == 0):
-                saying = random.choice(SAYINGS[new_mood])
+            time_for_new_saying = tick > 0 and tick % (FPS * 10) == 0  # not at tick 0: keep the opening line
+            if not petted and (new_mood != mood or time_for_new_saying):
+                saying = pick_saying(new_mood, vitals)
+            if vitals.claude_here and not claude_was_here and not petted:
+                saying = CLAUDE_GREETING
+            claude_was_here = vitals.claude_here
             mood = new_mood
         if was_petted and not petted:
-            saying = random.choice(SAYINGS[mood])  # back to its real mood
+            saying = pick_saying(mood, vitals)  # back to its real mood
         was_petted = petted
 
         screen.erase()
