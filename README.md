@@ -3,10 +3,10 @@
 A little raspberry that lives in the terminal and reacts to the Raspberry Pi's real vitals.
 
 <p align="center">
-  <img src="docs/piPetDemo.gif" alt="Pi Pet in a terminal cycling through its five moods: content and blinking, sleepy with floating Zs, hot with sweat drops, busy and running, and surfing on waves, with live temperature, load, fan, and Wi-Fi stats underneath" width="641">
+  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant, while the sky changes from a moonlit night with a ringed planet and a shooting star, through a red dawn and a cloudy day, to dusk and night again. The pet is petted and hops with hearts, sleeps, wakes up groggy, gets busy, surfs, overheats, gets hungry, stuffed, dizzy and lonely, with red alerts under its live stats when something's wrong" width="720">
 </p>
 
-<sub>Recorded from real runs on the Pi (`--mood` forces each mood for the demo).</sub>
+<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night and every mood fit in 29 seconds.</sub>
 
 ## Moods
 
@@ -30,8 +30,6 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
 
 It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline, AdGuard stopped), a red alert line under the stats says what.
-
-The demo above was recorded before dizzy, stuffed, hungry, groggy and lonely were added; try them with `--mood`.
 
 ## Running it
 
