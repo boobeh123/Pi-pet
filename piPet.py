@@ -33,7 +33,7 @@ ONCE_MAX_HEIGHT = 24
 # --once colors, matching the live view's curses colors (ANSI SGR codes; '' means the terminal's default)
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
-    'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '',
+    'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '', 'doctor': '1',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
@@ -92,6 +92,7 @@ SAYINGS = {
 CLAUDE_GREETING = 'oh hi Claude!'
 CLAUDE_SAYINGS = ['Claude is here!', 'hey Claude, look at my sky', 'Claude, wanna be friends?']
 GUARD_SAYINGS = ['the guard is on duty', 'no ads get past us', 'thanks for guarding, buddy']
+DOCTOR_SAYINGS = ["the doctor says I'm healthy", 'just a checkup', 'my vitals are at :3141']
 PLANT_SAYINGS = ['look, my plant bloomed!', 'a whole week without a reboot!']
 CHATTY_MOODS = ('content', 'busy', 'surfing')
 FRIEND_SAYING_CHANCE = 1 / 3
@@ -122,6 +123,15 @@ PLANT_STAGES = [
     (7, [(' (@) ', 'berry'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # in flower
 ]
 PLANT_OFFSET = 24  # columns from the pet's left edge, past the Zs, cloud and hearts
+
+# The Pi Vitals doctor: visits while the Pi Vitals dashboard is listening on its port
+PI_VITALS_PORT = 3141
+DOCTOR_CHECKING = [
+    [' _+_ ', '(o-o)', '/|=|\\'],  # checking on the pet
+    [' _+_ ', '(.-.)', '/|=|\\'],  # writing notes
+]
+DOCTOR_WORRIED = [' _+_ ', '(O-O)', '/|=|\\']
+URGENT_MOODS = ('dizzy', 'hot', 'stuffed', 'hungry')
 
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
@@ -249,6 +259,25 @@ def read_process_names():
     return names
 
 
+def is_port_listening(port):
+    """True if something on this machine is listening on a TCP port, from /proc/net/tcp and tcp6.
+
+    Only reads the kernel's socket table, so it never connects to (or shows up in the logs of) the server.
+    """
+    port_hex = f':{port:04X}'
+    for path in ('/proc/net/tcp', '/proc/net/tcp6'):
+        try:
+            with open(path) as f:
+                next(f, None)  # header line
+                for line in f:
+                    fields = line.split()
+                    if len(fields) > 3 and fields[1].endswith(port_hex) and fields[3] == '0A':  # 0A means listening
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def is_adguard_installed():
     return any(os.path.exists(path) for path in ADGUARD_INSTALL_PATHS)
 
@@ -278,6 +307,7 @@ class Vitals:
         self.claude_here = 'claude' in processes  # a Claude Code session, in VS Code or the terminal
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
         self.adguard_running = 'AdGuardHome' in processes if is_adguard_installed() else None
+        self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.update_net_rate()
@@ -538,16 +568,22 @@ def build_sky(width, hour, tick, load=0.0):
     return cells
 
 
-def build_pals(vitals, tick):
+def build_pals(vitals, tick, mood):
     """The pals visiting right now, nearest the pet first, as (lines, color) for this frame.
 
-    The guard stands nearest because it's always there, so friends coming and going don't make it move.
+    They line up by how permanent they are (guard, doctor, then Claude), so the ones that come and go
+    don't make the others move, and a narrow window drops the most fleeting first.
     """
     pals = []
     if vitals.adguard_running:
         pals.append((GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)], 'guard'))  # a glance every second
     elif vitals.adguard_running is False:
         pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
+    if vitals.pi_vitals_running:
+        if mood in URGENT_MOODS:
+            pals.append((DOCTOR_WORRIED, 'doctor'))
+        else:
+            pals.append((DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
     if vitals.claude_here:
         pals.append((CLAUDE_PAL[tick // 4 % 2], 'claude'))  # twinkles about once a second
     return pals
@@ -575,7 +611,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot, cloud. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -642,7 +678,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     # Pals stand to the pet's left with their feet level with its feet, as many as fit
     feet_row = pet_top + pet_height - 1
     pal_right = left - 2
-    for lines, color in build_pals(vitals, tick):
+    for lines, color in build_pals(vitals, tick, mood):
         pal_left = pal_right - len(lines[0])
         if pal_left < 0:
             break
@@ -714,6 +750,7 @@ def pick_saying(mood, vitals, rng=random):
     """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
     friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
                       + (GUARD_SAYINGS if vitals.adguard_running else [])
+                      + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])
                       + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else []))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
         return rng.choice(friend_sayings)
@@ -787,6 +824,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'guard': curses.color_pair(5) | curses.A_BOLD,
         'pot': curses.color_pair(4),
         'cloud': 0,  # the terminal's own text color, so clouds show on light and dark themes
+        'doctor': curses.A_BOLD,  # a white coat, in the terminal's own text color
     }
 
     vitals = Vitals(forced_mood, interface)

@@ -21,7 +21,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
-                claude_here=False, adguard_running=None):
+                claude_here=False, adguard_running=None, pi_vitals_running=False):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -38,6 +38,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.hour = hour
     vitals.claude_here = claude_here
     vitals.adguard_running = adguard_running
+    vitals.pi_vitals_running = pi_vitals_running
     return vitals
 
 
@@ -129,7 +130,7 @@ class LayoutTest(unittest.TestCase):
 
     def all_layouts(self, sizes=SIZES):
         # With both pals and the plant in flower (its tallest), wherever there's room
-        vitals = make_vitals(claude_here=True, adguard_running=True, uptime_sec=8 * DAY)
+        vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY)
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -266,6 +267,7 @@ class SceneTest(unittest.TestCase):
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
                                              make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
+                                                         pi_vitals_running=True,
                                                          adguard_running=tick % 2 == 0))  # guard awake or asleep
                         seen = set()
                         for row, col, text, _ in cells:
@@ -574,6 +576,67 @@ class OnceTest(unittest.TestCase):
             self.assertIn(piece, output)
         self.assertNotIn('q to quit', output)
         self.assertNotIn('\x1b[', output, 'no colors when the output is not a terminal')
+
+
+SAMPLE_TCP = """\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:0C45 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 1 1
+   1: 3C44A8C0:0016 3F44A8C0:D431 01 00000000:00000000 00:00000000 00000000     0        0 2 1
+"""
+
+
+class DoctorTest(unittest.TestCase):
+    def pal_colors(self, cells):
+        return [color for _, _, text, color in cells if len(text) == 5 and color in ('guard', 'doctor', 'claude')]
+
+    def doctor_faces(self, mood='content', ticks=TICKS):
+        faces = set()
+        for tick in ticks:
+            cells = piPet.layout(24, 80, mood, tick, 'hi', make_vitals(pi_vitals_running=True))
+            faces |= {text for _, _, text, color in cells if color == 'doctor' and text.startswith('(')}
+        return faces
+
+    def test_finds_a_listening_port_without_connecting(self):
+        with fake_file(SAMPLE_TCP):
+            self.assertTrue(piPet.is_port_listening(3141))
+            self.assertFalse(piPet.is_port_listening(22), 'an open connection on 22 is not a listening socket')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertFalse(piPet.is_port_listening(3141))
+
+    def test_doctor_frames_line_up(self):
+        for frame in piPet.DOCTOR_CHECKING + [piPet.DOCTOR_WORRIED]:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+
+    def test_doctor_visits_only_while_pi_vitals_runs(self):
+        with_doctor = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(pi_vitals_running=True))
+        without = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals())
+        self.assertIn('doctor', self.pal_colors(with_doctor))
+        self.assertNotIn('doctor', self.pal_colors(without))
+
+    def test_doctor_checks_and_takes_notes(self):
+        self.assertEqual(self.doctor_faces(), {'(o-o)', '(.-.)'})
+
+    def test_doctor_worries_about_urgent_moods(self):
+        for mood in piPet.URGENT_MOODS:
+            with self.subTest(mood=mood):
+                self.assertEqual(self.doctor_faces(mood), {'(O-O)'})
+        self.assertNotIn('(O-O)', self.doctor_faces('sleepy'))
+
+    def test_pals_line_up_by_how_permanent_they_are(self):
+        vitals = make_vitals(adguard_running=True, pi_vitals_running=True, claude_here=True)
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', vitals)
+        order = sorted((col, color) for _, col, text, color in cells if color in ('guard', 'doctor', 'claude') and len(text) == 5)
+        nearest_first = list(dict.fromkeys(color for _, color in reversed(order)))
+        self.assertEqual(nearest_first, ['guard', 'doctor', 'claude'])
+
+    def test_pet_mentions_the_doctor_only_during_a_visit(self):
+        rng = random.Random(4)
+        visiting = {piPet.pick_saying('content', make_vitals(pi_vitals_running=True), rng) for _ in range(200)}
+        away = {piPet.pick_saying('content', make_vitals(), rng) for _ in range(200)}
+        self.assertTrue(visiting & set(piPet.DOCTOR_SAYINGS))
+        self.assertFalse(away & set(piPet.DOCTOR_SAYINGS))
 
 
 class AlertTest(unittest.TestCase):
