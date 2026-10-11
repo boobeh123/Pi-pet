@@ -40,6 +40,9 @@ ANSI_COLORS = {
 SKY_HEIGHT = 3
 SCENE_MIN_WIDTH = 40
 GROUND_PATTERN = "_.,_'_,."
+SYNODIC_MONTH_DAYS = 29.530588853  # new moon to new moon
+KNOWN_NEW_MOON = 947182440  # 2000-01-06 18:14 UTC
+MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycle; None is the new moon
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
 CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 
@@ -310,6 +313,7 @@ class Vitals:
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
+        self.moon_age = moon_age_days(time.time())
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -508,6 +512,17 @@ def build_extras(mood, tick):
     return []
 
 
+def moon_age_days(timestamp):
+    """Days since the last new moon (0 to 29.5), counted from a known new moon. Good to about a day."""
+    return ((timestamp - KNOWN_NEW_MOON) / 86400) % SYNODIC_MONTH_DAYS
+
+
+def moon_glyph(age_days):
+    """The moon's shape as seen from the northern hemisphere, or None at new moon (nothing to see)."""
+    eighth = int(age_days / SYNODIC_MONTH_DAYS * 8 + 0.5) % 8  # 0 new, 2 first quarter, 4 full, 6 last quarter
+    return MOON_SHAPES[eighth]
+
+
 def cloud_count(load):
     """The busier the CPU, the cloudier the day: 1 cloud when idle, up to 3."""
     if load < 0.5:
@@ -537,24 +552,27 @@ def build_clouds(width, load, tick):
     return cells
 
 
-def build_sky(width, hour, tick, load=0.0):
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
-    a moon and stars by night.
+    the moon in its real phase and stars by night.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
+    The moon's shape is real; its path is simplified (a real moon rises later each night).
     """
     daytime = 6 <= hour < 18
     progress = ((hour - 6) % 12) / 12  # 0 at sunrise or sunset, 1 twelve hours later
-    body = '-O-' if daytime else 'C'
-    body_col = round(progress * (width - 1 - len(body)))
+    body = '-O-' if daytime else moon_glyph(moon_age)  # None on a new moon night
+    body_col = round(progress * (width - 1 - len(body or ' ')))
     body_row = round((SKY_HEIGHT - 1) * (1 - math.sin(math.pi * progress)))
 
     cells = []
     if not daytime:
         rng = random.Random(width)  # the same stars for the same window width, so they don't jump around
-        spots = {(rng.randrange(SKY_HEIGHT), rng.randrange(width - 1)) for _ in range(width // 8)}
+        # A new moon night is darker, so more stars show; the extras are added after the usual ones
+        star_count = width // 5 if body is None else width // 8
+        spots = {(rng.randrange(SKY_HEIGHT), rng.randrange(width - 1)) for _ in range(star_count)}
         for i, (row, col) in enumerate(sorted(spots)):
-            if row == body_row and body_col - 1 <= col <= body_col + len(body):
+            if body and row == body_row and body_col - 1 <= col <= body_col + len(body):
                 continue  # behind the moon
             twinkle = (tick // 4 + i) % 5 == 0
             cells.append((row, col, '*' if twinkle else '.', 'plain'))
@@ -564,7 +582,8 @@ def build_sky(width, hour, tick, load=0.0):
                              for row, col, text, _ in cells)
         if behind_a_cloud:
             return cells
-    cells.append((body_row, body_col, body, 'sun' if daytime else 'moon'))
+    if body:
+        cells.append((body_row, body_col, body, 'sun' if daytime else 'moon'))
     return cells
 
 
@@ -653,7 +672,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
-        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load):
+        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age):
             add(row, col, text, color)
     else:
         top = (usable - block_height) // 2

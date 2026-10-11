@@ -21,7 +21,8 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
-                claude_here=False, adguard_running=None, pi_vitals_running=False):
+                claude_here=False, adguard_running=None, pi_vitals_running=False,
+                moon_age=14.8):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -39,6 +40,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.claude_here = claude_here
     vitals.adguard_running = adguard_running
     vitals.pi_vitals_running = pi_vitals_running
+    vitals.moon_age = moon_age
     return vitals
 
 
@@ -267,7 +269,7 @@ class SceneTest(unittest.TestCase):
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
                                              make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
-                                                         pi_vitals_running=True,
+                                                         pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
                                                          adguard_running=tick % 2 == 0))  # guard awake or asleep
                         seen = set()
                         for row, col, text, _ in cells:
@@ -286,7 +288,7 @@ class SceneTest(unittest.TestCase):
 
     def test_sun_by_day_moon_and_stars_by_night(self):
         day = piPet.build_sky(80, 12.0, 0)
-        night = piPet.build_sky(80, 0.0, 0)
+        night = piPet.build_sky(80, 0.0, 0, moon_age=22.1)  # last quarter
         self.assertEqual([text for *_, text, color in day if color in ('sun', 'moon')], ['-O-'])
         self.assertEqual([text for *_, text, color in night if color in ('sun', 'moon')], ['C'])
         self.assertFalse([cell for cell in day if cell[3] == 'plain'], 'no stars in the daytime')
@@ -492,6 +494,36 @@ class PlantTest(unittest.TestCase):
         said_leafy = {piPet.pick_saying('content', make_vitals(uptime_sec=4 * DAY), rng) for _ in range(200)}
         self.assertTrue(said_in_flower & set(piPet.PLANT_SAYINGS))
         self.assertFalse(said_leafy & set(piPet.PLANT_SAYINGS))
+
+
+class MoonTest(unittest.TestCase):
+    def test_moon_age_matches_known_new_and_full_moons(self):
+        # The total solar eclipse of 2024-04-08 (~18:20 UTC) happened at new moon,
+        # and the full moon of 2024-04-23 was at ~23:49 UTC. The formula is good to about a day.
+        eclipse = 1712600400
+        full_moon = 1713916140
+        age_at_eclipse = piPet.moon_age_days(eclipse)
+        self.assertTrue(age_at_eclipse < 1 or age_at_eclipse > piPet.SYNODIC_MONTH_DAYS - 1, age_at_eclipse)
+        self.assertAlmostEqual(piPet.moon_age_days(full_moon), piPet.SYNODIC_MONTH_DAYS / 2, delta=1)
+
+    def test_shapes_through_the_month(self):
+        cases = [(0, None), (2.5, ')'), (7.4, 'D'), (14.8, 'O'), (22.1, 'C'), (26.5, '('), (29.3, None)]
+        for age, shape in cases:
+            with self.subTest(age=age):
+                self.assertEqual(piPet.moon_glyph(age), shape)
+
+    def test_new_moon_night_has_no_moon_and_more_stars(self):
+        def stars(cells):
+            return {(row, col) for row, col, _, color in cells if color == 'plain'}
+        new_moon = piPet.build_sky(80, 22.0, 0, moon_age=0.2)
+        full_moon = piPet.build_sky(80, 22.0, 0, moon_age=14.8)
+        self.assertFalse([cell for cell in new_moon if cell[3] == 'moon'])
+        self.assertEqual([text for *_, text, color in full_moon if color == 'moon'], ['O'])
+        self.assertGreater(len(stars(new_moon)), len(stars(full_moon)))
+
+    def test_layout_draws_the_real_phase(self):
+        cells = piPet.layout(24, 80, 'sleepy', 1, 'zzz...', make_vitals(hour=21.0, moon_age=7.4))
+        self.assertEqual([text for *_, text, color in cells if color == 'moon'], ['D'])
 
 
 class CloudTest(unittest.TestCase):
