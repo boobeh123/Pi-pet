@@ -29,7 +29,7 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
 
-It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline), a red alert line under the stats says what.
+It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline, AdGuard stopped), a red alert line under the stats says what.
 
 The demo above was recorded before dizzy, stuffed, hungry, groggy and lonely were added; try them with `--mood`.
 
@@ -53,9 +53,12 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 
 | Pal | Visits when | Looks like |
 |---|---|---|
+| Guard | AdGuard Home is installed: on watch while it runs, asleep if it stops | A blue `(o_o)` with a helmet and a `[+]` shield, glancing left and right; `(-_-)` with a `z` when asleep |
 | Claude | A Claude Code session is open on the Pi (VS Code or terminal) | A gold sparkle `-^‿^-` that twinkles |
 
-When Claude arrives the pet says "oh hi Claude!", and while Claude is around its calm moods (content, busy, surfing) sometimes chat with it. Urgent moods stick to their own news.
+The guard stands nearest the pet, since it's always there. If AdGuard Home stops, the alert line says `AdGuard stopped`. On a Pi without AdGuard Home there's no guard.
+
+When Claude arrives the pet says "oh hi Claude!". While pals are around, its calm moods (content, busy, surfing) sometimes chat with them. Urgent moods stick to their own news.
 
 In a smaller terminal window it drops the scene first, then the speech bubble, and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
 
@@ -67,7 +70,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-71 standard-library tests, no sensors needed. They check:
+78 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -77,6 +80,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - petting: red hearts, the happy hop, and that the sensors alone never make it happy
 - the scene: only in big windows, never overlapping anything at any hour, sun by day and moon and stars by night, the sun's path, stars that twinkle without moving, and grass right under the feet
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
+- the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
@@ -94,5 +98,6 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Uptime | `/proc/uptime` |
 | Time of day | the Pi's local clock (`time.localtime()`) |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
+| AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs |
 | Online | a default route in `/proc/net/route` |
 | Network traffic | `/proc/net/dev` (bytes in + out, compared between polls) on the interface the default route uses in `/proc/net/route` (lowest metric wins, falls back to `wlan0`). `--iface` picks one instead. |

@@ -19,7 +19,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
-                claude_here=False):
+                claude_here=False, adguard_running=None):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -35,6 +35,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.online = online
     vitals.hour = hour
     vitals.claude_here = claude_here
+    vitals.adguard_running = adguard_running
     return vitals
 
 
@@ -125,7 +126,7 @@ class LayoutTest(unittest.TestCase):
     SIZES = [(24, 80), (40, 120), (14, 30), (12, 40), (11, 24)]  # (height, width), down to the minimum
 
     def all_layouts(self, sizes=SIZES):
-        vitals = make_vitals(claude_here=True)  # with a pal visiting, wherever there's room
+        vitals = make_vitals(claude_here=True, adguard_running=True)  # with both pals, wherever there's room
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -261,7 +262,8 @@ class SceneTest(unittest.TestCase):
                 for mood in piPet.FACES:
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
-                                             make_vitals(hour=hour, claude_here=True))
+                                             make_vitals(hour=hour, claude_here=True,
+                                                         adguard_running=tick % 2 == 0))  # guard awake or asleep
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -333,11 +335,10 @@ class ClaudePalTest(unittest.TestCase):
 
         return mock.patch.object(piPet.glob, 'glob', return_value=paths), mock.patch('builtins.open', side_effect=fake_open)
 
-    def test_finds_a_claude_process(self):
-        for names, expected in ((['bash', None, 'claude'], True), (['bash', 'node', 'claude-helper'], False), ([], False)):
-            patch_glob, patch_open = self.fake_processes(names)
-            with self.subTest(names=names), patch_glob, patch_open:
-                self.assertIs(piPet.is_claude_running(), expected)
+    def test_reads_process_names(self):
+        patch_glob, patch_open = self.fake_processes(['bash', None, 'claude', 'AdGuardHome'])
+        with patch_glob, patch_open:
+            self.assertEqual(piPet.read_process_names(), {'bash', 'claude', 'AdGuardHome'})
 
     def test_pal_frames_line_up(self):
         for frame in piPet.CLAUDE_PAL:
@@ -386,6 +387,54 @@ class ClaudePalTest(unittest.TestCase):
         for saying in piPet.CLAUDE_SAYINGS + [piPet.CLAUDE_GREETING]:
             for char in ''.join(piPet.build_bubble(saying)):
                 self.assertTrue(is_one_column(char))
+
+
+class GuardTest(unittest.TestCase):
+    def guard_cells(self, running, claude_here=False, tick=1, height=24, width=80):
+        cells = piPet.layout(height, width, 'content', tick, 'hi', make_vitals(adguard_running=running, claude_here=claude_here))
+        guard_lines = {line for frame in piPet.GUARD_ON_WATCH + piPet.GUARD_ASLEEP for line in frame}
+        return cells, [(row, col, text, color) for row, col, text, color in cells if text in guard_lines]
+
+    def test_guard_frames_line_up(self):
+        for frame in piPet.GUARD_ON_WATCH + piPet.GUARD_ASLEEP:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+
+    def test_no_guard_when_adguard_is_not_installed(self):
+        self.assertEqual(self.guard_cells(running=None)[1], [])
+
+    def test_guard_on_watch_glances_around(self):
+        faces = {text for tick in TICKS for _, _, text, _ in self.guard_cells(True, tick=tick)[1] if text.startswith('(')}
+        self.assertEqual(faces, {'(o_o)', '(<_<)', '(>_>)'})
+        self.assertTrue(all(color == 'guard' for *_, color in self.guard_cells(True)[1]))
+
+    def test_guard_dozes_when_adguard_stops(self):
+        _, guard = self.guard_cells(False)
+        self.assertIn('(-_-)', [text for _, _, text, _ in guard])
+        self.assertTrue(all(color == 'dim' for *_, color in guard))
+        self.assertIn('AdGuard stopped', piPet.build_alerts(make_vitals(adguard_running=False)))
+        self.assertNotIn('AdGuard', piPet.build_alerts(make_vitals(adguard_running=True)))
+        self.assertNotIn('AdGuard', piPet.build_alerts(make_vitals(adguard_running=None)))
+
+    def test_guard_stands_nearest_the_pet(self):
+        cells, guard = self.guard_cells(True, claude_here=True)
+        claude_cols = [col for _, col, _, color in cells if color == 'claude']
+        self.assertTrue(claude_cols, 'both pals should fit at 80 columns')
+        self.assertLess(max(claude_cols), min(col for _, col, _, _ in guard))
+
+    def test_guard_gets_the_only_spot(self):
+        # 40 columns: room for one pal beside the pet
+        cells, guard = self.guard_cells(True, claude_here=True, height=20, width=40)
+        self.assertTrue(guard)
+        self.assertFalse([cell for cell in cells if cell[3] == 'claude'])
+
+    def test_pet_thanks_the_guard_only_while_on_watch(self):
+        rng = random.Random(2)
+        said_on_watch = {piPet.pick_saying('content', make_vitals(adguard_running=True), rng) for _ in range(200)}
+        said_asleep = {piPet.pick_saying('content', make_vitals(adguard_running=False), rng) for _ in range(200)}
+        self.assertTrue(said_on_watch & set(piPet.GUARD_SAYINGS))
+        self.assertFalse(said_asleep & set(piPet.GUARD_SAYINGS))
 
 
 class AlertTest(unittest.TestCase):

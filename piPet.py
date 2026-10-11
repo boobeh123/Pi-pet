@@ -77,6 +77,7 @@ SAYINGS = {
 # Friends who visit, and what the pet says to them. Only calm moods chat; urgent ones stick to their own news.
 CLAUDE_GREETING = 'oh hi Claude!'
 CLAUDE_SAYINGS = ['Claude is here!', 'hey Claude, look at my sky', 'Claude, wanna be friends?']
+GUARD_SAYINGS = ['the guard is on duty', 'no ads get past us', 'thanks for guarding, buddy']
 CHATTY_MOODS = ('content', 'busy', 'surfing')
 FRIEND_SAYING_CHANCE = 1 / 3
 
@@ -85,6 +86,19 @@ CLAUDE_PAL = [
     [' \\|/ ', '-^‿^-', ' /|\\ '],
     [' .|. ', '-^‿^-', " '|' "],  # twinkle
 ]
+
+# The AdGuard Home guard: on watch while the service runs, asleep if it stops
+GUARD_ON_WATCH = [
+    [' _^_ ', '(o_o)', '/[+]\\'],
+    [' _^_ ', '(<_<)', '/[+]\\'],  # glances left
+    [' _^_ ', '(o_o)', '/[+]\\'],
+    [' _^_ ', '(>_>)', '/[+]\\'],  # glances right
+]
+GUARD_ASLEEP = [
+    [' _^_z', '(-_-)', '/[+]\\'],
+    [' _^_Z', '(-_-)', '/[+]\\'],
+]
+ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
 
 # ---------------------------------------------------------------------------
@@ -198,16 +212,20 @@ def read_uptime_sec():
         return None
 
 
-def is_claude_running():
-    """True if a Claude Code session is running on this machine (a process named claude)."""
+def read_process_names():
+    """The names of every running process (from /proc/*/comm, so at most 15 characters each)."""
+    names = set()
     for comm_path in glob.glob('/proc/[0-9]*/comm'):
         try:
             with open(comm_path) as f:
-                if f.read().strip() == 'claude':
-                    return True
+                names.add(f.read().strip())
         except OSError:
             continue  # the process ended while we looked
-    return False
+    return names
+
+
+def is_adguard_installed():
+    return any(os.path.exists(path) for path in ADGUARD_INSTALL_PATHS)
 
 
 class Vitals:
@@ -231,7 +249,10 @@ class Vitals:
         self.disk_used_percent = read_disk_used_percent()
         self.uptime_sec = read_uptime_sec()
         self.online = get_default_interface() is not None
-        self.claude_here = is_claude_running()
+        processes = read_process_names()
+        self.claude_here = 'claude' in processes  # a Claude Code session, in VS Code or the terminal
+        # None when AdGuard Home isn't installed, so other Pis get no guard at all
+        self.adguard_running = 'AdGuardHome' in processes if is_adguard_installed() else None
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.update_net_rate()
@@ -381,6 +402,8 @@ def build_alerts(vitals):
         alerts.append(f'memory {vitals.memory_free_percent:.0f}% free')
     if not vitals.online:
         alerts.append('offline')
+    if vitals.adguard_running is False:
+        alerts.append('AdGuard stopped')
     return '  ·  '.join(alerts)
 
 
@@ -455,8 +478,15 @@ def build_sky(width, hour, tick):
 
 
 def build_pals(vitals, tick):
-    """The pals visiting right now, nearest the pet first, as (lines, color) for this frame."""
+    """The pals visiting right now, nearest the pet first, as (lines, color) for this frame.
+
+    The guard stands nearest because it's always there, so friends coming and going don't make it move.
+    """
     pals = []
+    if vitals.adguard_running:
+        pals.append((GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)], 'guard'))  # a glance every second
+    elif vitals.adguard_running is False:
+        pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
     if vitals.claude_here:
         pals.append((CLAUDE_PAL[tick // 4 % 2], 'claude'))  # twinkles about once a second
     return pals
@@ -470,7 +500,7 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude. Nothing is placed on the bottom row
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass, claude, guard. Nothing is placed on the bottom row
     or in the last column, because curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -568,9 +598,10 @@ def layout(height, width, mood, tick, saying, vitals):
 
 
 def pick_saying(mood, vitals, rng=random):
-    """Something to say for this mood; calm moods sometimes talk to a visiting friend instead."""
-    if vitals.claude_here and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
-        return rng.choice(CLAUDE_SAYINGS)
+    """Something to say for this mood; calm moods sometimes talk to a pal instead."""
+    friend_sayings = (CLAUDE_SAYINGS if vitals.claude_here else []) + (GUARD_SAYINGS if vitals.adguard_running else [])
+    if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
+        return rng.choice(friend_sayings)
     return rng.choice(SAYINGS[mood])
 
 
@@ -629,6 +660,7 @@ def run_live(screen, forced_mood=None, interface=None):
     curses.init_pair(2, curses.COLOR_RED, -1)
     curses.init_pair(3, curses.COLOR_CYAN, -1)
     curses.init_pair(4, curses.COLOR_YELLOW, -1)
+    curses.init_pair(5, curses.COLOR_BLUE, -1)
     colors = {
         'leaf': curses.color_pair(1) | curses.A_BOLD,
         'berry': curses.color_pair(2) | curses.A_BOLD,
@@ -640,6 +672,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'moon': curses.A_BOLD,
         'grass': curses.color_pair(1),
         'claude': curses.color_pair(4),
+        'guard': curses.color_pair(5) | curses.A_BOLD,
     }
 
     vitals = Vitals(forced_mood, interface)
