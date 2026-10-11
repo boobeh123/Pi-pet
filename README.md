@@ -45,7 +45,9 @@ python3 piPet.py --iface eth0 # watch one network interface (default: whichever 
 python3 piPet.py --help       # list the options
 ```
 
-In a small terminal window it drops the speech bubble first and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
+In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon), then a `C` moon crosses among twinkling stars until morning. On the grass, bouncing pets hop up instead of down.
+
+In a smaller terminal window it drops the scene first, then the speech bubble, and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
 
 Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps one CPU core at 100% (Ctrl+C to stop); run it two or three times to push the load past 2.
 
@@ -55,7 +57,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-55 standard-library tests, no sensors needed. They check:
+62 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -63,6 +65,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the extras beside the pet (Zs, rain cloud, stars) never cover the pet or its speech bubble, and the alert line
 - reading the power alarm, memory, disk and uptime
 - petting: red hearts, the happy hop, and that the sensors alone never make it happy
+- the scene: only in big windows, never overlapping anything at any hour, sun by day and moon and stars by night, the sun's path, stars that twinkle without moving, and grass right under the feet
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
@@ -78,5 +81,6 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Disk | `os.statvfs('/')`, same math as `df`'s Use% |
 | Memory | `MemAvailable` ÷ `MemTotal` in `/proc/meminfo` |
 | Uptime | `/proc/uptime` |
+| Time of day | the Pi's local clock (`time.localtime()`) |
 | Online | a default route in `/proc/net/route` |
 | Network traffic | `/proc/net/dev` (bytes in + out, compared between polls) on the interface the default route uses in `/proc/net/route` (lowest metric wins, falls back to `wlan0`). `--iface` picks one instead. |

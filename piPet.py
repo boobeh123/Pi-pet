@@ -11,6 +11,7 @@
 import argparse
 import curses
 import glob
+import math
 import os
 import random
 import time
@@ -22,6 +23,11 @@ DEFAULT_INTERFACE = 'wlan0'  # used when there's no default route to follow
 PET_WIDTH = 13
 MIN_WIDTH = 24
 MIN_HEIGHT = 11
+
+# Big windows also get a scene: sky across the top and grass under the pet's feet
+SKY_HEIGHT = 3
+SCENE_MIN_WIDTH = 40
+GROUND_PATTERN = "_.,_'_,."
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
@@ -201,6 +207,8 @@ class Vitals:
         self.disk_used_percent = read_disk_used_percent()
         self.uptime_sec = read_uptime_sec()
         self.online = get_default_interface() is not None
+        now = time.localtime()
+        self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -397,12 +405,42 @@ def build_extras(mood, tick):
     return []
 
 
+def build_sky(width, hour, tick):
+    """The sky across the top of the window as (row, col, text, color): a sun by day, a moon and stars by night.
+
+    The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
+    """
+    daytime = 6 <= hour < 18
+    progress = ((hour - 6) % 12) / 12  # 0 at sunrise or sunset, 1 twelve hours later
+    body = '-O-' if daytime else 'C'
+    body_col = round(progress * (width - 1 - len(body)))
+    body_row = round((SKY_HEIGHT - 1) * (1 - math.sin(math.pi * progress)))
+
+    cells = []
+    if not daytime:
+        rng = random.Random(width)  # the same stars for the same window width, so they don't jump around
+        spots = {(rng.randrange(SKY_HEIGHT), rng.randrange(width - 1)) for _ in range(width // 8)}
+        for i, (row, col) in enumerate(sorted(spots)):
+            if row == body_row and body_col - 1 <= col <= body_col + len(body):
+                continue  # behind the moon
+            twinkle = (tick // 4 + i) % 5 == 0
+            cells.append((row, col, '*' if twinkle else '.', 'plain'))
+    cells.append((body_row, body_col, body, 'sun' if daytime else 'moon'))
+    return cells
+
+
+def build_ground(width):
+    """A line of grass across the window."""
+    return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
+
+
 def layout(height, width, mood, tick, saying, vitals):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert. Nothing is placed on the bottom row or in the last
-    column, because curses raises an error when writing the window's bottom-right corner.
-    When space runs out, the pet and status line stay; the alert line, the bubble and the quit hint go first.
+    Colors: leaf, berry, extra, plain, dim, alert, sun, moon, grass. Nothing is placed on the bottom row
+    or in the last column, because curses raises an error when writing the window's bottom-right corner.
+    When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
+    the bubble and the quit hint go first.
     """
     cells = []
 
@@ -421,7 +459,9 @@ def layout(height, width, mood, tick, saying, vitals):
 
     pet = build_pet(mood, tick)
     bounced = pet[0][0] == ''
-    pet_height = len(pet) - bounced  # center on the resting pet so the bounce moves the pet, not the bubble
+    if bounced:
+        pet = pet[1:]  # lay out the resting pet, then move it a row, so the bounce moves the pet and not the bubble
+    pet_height = len(pet)
     bubble = build_bubble(saying)
     extras = build_extras(mood, tick)
     alerts = build_alerts(vitals)
@@ -434,7 +474,15 @@ def layout(height, width, mood, tick, saying, vitals):
         alerts = ''
     show_bubble = body_height + len(bubble) <= usable
     block_height = body_height + (len(bubble) if show_bubble else 0)
-    top = (usable - block_height) // 2
+
+    # The scene only shows when everything else fits too (plus a hop row above the pet and the ground under it)
+    show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
+    if show_scene:
+        top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
+        for row, col, text, color in build_sky(width, vitals.hour, tick):
+            add(row, col, text, color)
+    else:
+        top = (usable - block_height) // 2
 
     # Center the pet, but move left if that keeps a long bubble (or the extras) inside the window
     widest = max([len(text) for text, _ in pet]
@@ -447,8 +495,12 @@ def layout(height, width, mood, tick, saying, vitals):
         for i, line in enumerate(bubble):
             add(top + i, left, line, 'plain')
         pet_top += len(bubble)
+    if show_scene:
+        pet_top += 1  # hop row
+    # Standing on the ground, a bouncing pet hops up into the hop row; without ground it drops into the gap below
+    drawn_top = pet_top + (0 if not bounced else -1 if show_scene else 1)
     for i, (text, color) in enumerate(pet):
-        add(pet_top + i, left, text, color)
+        add(drawn_top + i, left, text, color)
     extras_color = 'berry' if mood == 'happy' else 'extra'  # red hearts
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
@@ -457,6 +509,9 @@ def layout(height, width, mood, tick, saying, vitals):
     if len(status) > width - 1:
         status = build_short_status(vitals)
     status_row = pet_top + pet_height + 1
+    if show_scene:
+        add(pet_top + pet_height, 0, build_ground(width), 'grass')
+        status_row += 1
     add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
     last_row = status_row
     if alerts:
@@ -522,6 +577,7 @@ def run_live(screen, forced_mood=None, interface=None):
     curses.init_pair(1, curses.COLOR_GREEN, -1)
     curses.init_pair(2, curses.COLOR_RED, -1)
     curses.init_pair(3, curses.COLOR_CYAN, -1)
+    curses.init_pair(4, curses.COLOR_YELLOW, -1)
     colors = {
         'leaf': curses.color_pair(1) | curses.A_BOLD,
         'berry': curses.color_pair(2) | curses.A_BOLD,
@@ -529,6 +585,9 @@ def run_live(screen, forced_mood=None, interface=None):
         'plain': 0,
         'dim': curses.A_DIM,
         'alert': curses.color_pair(2),
+        'sun': curses.color_pair(4) | curses.A_BOLD,
+        'moon': curses.A_BOLD,
+        'grass': curses.color_pair(1),
     }
 
     vitals = Vitals(forced_mood, interface)

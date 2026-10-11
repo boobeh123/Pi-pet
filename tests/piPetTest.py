@@ -17,7 +17,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
-                disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True):
+                disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -31,6 +31,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.memory_free_percent = memory_free_percent
     vitals.uptime_sec = uptime_sec
     vitals.online = online
+    vitals.hour = hour
     return vitals
 
 
@@ -166,8 +167,9 @@ class LayoutTest(unittest.TestCase):
                 self.assertTrue(all('window too small'.startswith(text) for _, _, text, _ in cells))
 
     def test_busy_bounce_moves_the_pet_not_the_bubble(self):
+        # 16 rows: room for the bubble but not the scene, so the pet drops into the gap below it
         def bubble_and_leaf_rows(tick):
-            cells = piPet.layout(24, 80, 'busy', tick, 'working hard!', make_vitals())
+            cells = piPet.layout(16, 80, 'busy', tick, 'working hard!', make_vitals())
             bubble_row = next(row for row, _, text, _ in cells if 'working hard!' in text)
             leaf_row = next(row for row, _, text, _ in cells if '\\\\|//' in text)
             return bubble_row, leaf_row
@@ -184,10 +186,11 @@ class PettingTest(unittest.TestCase):
         self.assertEqual(hearts, ['berry', 'berry'])
 
     def test_happy_pet_hops(self):
-        def leaf_row(tick):
-            cells = piPet.layout(24, 80, 'happy', tick, 'hehe!', make_vitals())
+        def leaf_row(height, tick):
+            cells = piPet.layout(height, 80, 'happy', tick, 'hehe!', make_vitals())
             return next(row for row, _, text, _ in cells if '\\\\|//' in text)
-        self.assertEqual(leaf_row(2), leaf_row(1) + 1)
+        self.assertEqual(leaf_row(24, 2), leaf_row(24, 1) - 1, 'on the ground it hops up')
+        self.assertEqual(leaf_row(16, 2), leaf_row(16, 1) + 1, 'without ground it drops into the gap')
 
     def test_sensors_never_pick_happy(self):
         # Happiness only comes from petting
@@ -242,6 +245,76 @@ class MoodTest(unittest.TestCase):
 
     def test_every_mood_has_a_face_and_sayings(self):
         self.assertEqual(set(piPet.FACES), set(piPet.SAYINGS))
+
+
+def cell_texts(cells, color):
+    return [(row, col, text) for row, col, text, cell_color in cells if cell_color == color]
+
+
+class SceneTest(unittest.TestCase):
+    def test_scene_layouts_stay_inside_and_never_overlap(self):
+        for height, width in ((24, 80), (40, 120), (20, 40)):
+            for hour in (0.0, 7.0, 12.0, 17.9, 18.0, 23.5):
+                for mood in piPet.FACES:
+                    for tick in TICKS:
+                        cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1], make_vitals(hour=hour))
+                        seen = set()
+                        for row, col, text, _ in cells:
+                            with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
+                                self.assertTrue(0 <= row < height - 1 and col >= 0 and col + len(text) <= width - 1)
+                                for offset, char in enumerate(text):
+                                    if char != ' ':
+                                        self.assertNotIn((row, col + offset), seen)
+                                        seen.add((row, col + offset))
+
+    def test_scene_only_in_big_windows(self):
+        for (height, width), expected in ((24, 80), True), ((20, 40), True), ((16, 80), False), ((24, 39), False):
+            cells = piPet.layout(height, width, 'content', 1, 'just vibing', make_vitals())
+            with self.subTest(size=(height, width)):
+                self.assertEqual(bool(cell_texts(cells, 'grass')), expected)
+
+    def test_sun_by_day_moon_and_stars_by_night(self):
+        day = piPet.build_sky(80, 12.0, 0)
+        night = piPet.build_sky(80, 0.0, 0)
+        self.assertEqual([text for *_, text, color in day if color in ('sun', 'moon')], ['-O-'])
+        self.assertEqual([text for *_, text, color in night if color in ('sun', 'moon')], ['C'])
+        self.assertFalse([cell for cell in day if cell[3] == 'plain'], 'no stars in the daytime')
+        self.assertGreater(len([cell for cell in night if cell[3] == 'plain']), 3)
+
+    def test_sun_crosses_the_sky_and_is_highest_at_noon(self):
+        def sun(hour):
+            row, col, _, _ = next(cell for cell in piPet.build_sky(80, hour, 0) if cell[3] == 'sun')
+            return row, col
+        self.assertLess(sun(7)[1], sun(12)[1])
+        self.assertLess(sun(12)[1], sun(17)[1])
+        self.assertLess(sun(12)[0], sun(7)[0])
+        self.assertEqual(sun(12)[0], 0)
+
+    def test_stars_stay_put_and_twinkle(self):
+        frames = [piPet.build_sky(80, 22.0, tick) for tick in range(20)]
+        spots = {tuple((row, col) for row, col, _, color in frame if color == 'plain') for frame in frames}
+        self.assertEqual(len(spots), 1, 'stars should not move between frames')
+        looks = {tuple(text for *_, text, color in frame if color == 'plain') for frame in frames}
+        self.assertGreater(len(looks), 1, 'stars should twinkle')
+
+    def test_ground_is_right_under_the_feet(self):
+        for mood in piPet.FACES:
+            cells = piPet.layout(24, 80, mood, 1, 'hi', make_vitals())
+            feet_row = max(row for row, _, _, color in cells if color in ('berry', 'extra') and row < 20)
+            ground_row = cell_texts(cells, 'grass')[0][0]
+            with self.subTest(mood=mood):
+                self.assertEqual(ground_row, feet_row + 1)
+
+    def test_busy_pet_hops_up_on_the_ground(self):
+        def bubble_and_leaf_rows(tick):
+            cells = piPet.layout(24, 80, 'busy', tick, 'working hard!', make_vitals())
+            bubble_row = next(row for row, _, text, _ in cells if 'working hard!' in text)
+            leaf_row = next(row for row, _, text, _ in cells if '\\\\|//' in text)
+            return bubble_row, leaf_row
+
+        (bubble_rest, leaf_rest), (bubble_hop, leaf_hop) = bubble_and_leaf_rows(1), bubble_and_leaf_rows(2)
+        self.assertEqual(bubble_rest, bubble_hop)
+        self.assertEqual(leaf_hop, leaf_rest - 1)
 
 
 class AlertTest(unittest.TestCase):
