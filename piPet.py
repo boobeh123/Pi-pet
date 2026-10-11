@@ -34,7 +34,7 @@ ONCE_MAX_HEIGHT = 24
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
     'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '', 'doctor': '1',
-    'sunset': '1;31',
+    'sunset': '1;31', 'shooting_star': '1;33',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
@@ -46,7 +46,11 @@ KNOWN_NEW_MOON = 947182440  # 2000-01-06 18:14 UTC
 MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycle; None is the new moon
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
-CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
+CLOUD_TICKS_PER_COLUMN = 8
+SHOOTING_STAR_WINDOW = FPS * 60  # each minute of night has one chance of a shooting star...
+SHOOTING_STAR_CHANCE = 1 / 3     # ...so about one every three minutes
+SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
+SHOOTING_STAR_SPEED = 3          # columns per tick  # half a column a second at 4 FPS
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
@@ -292,6 +296,7 @@ class Vitals:
 
     def __init__(self, forced_mood=None, interface=None):
         self.forced_mood = forced_mood
+        self.sky_seed = random.randrange(1 << 30)  # this run's shooting stars
         self.chosen_interface = interface  # from --iface; None means follow the default route
         self.interface = interface or get_default_interface() or DEFAULT_INTERFACE
         self.last_net = read_net_bytes(self.interface)
@@ -579,10 +584,36 @@ def star_spots(width, count):
     return spots
 
 
-def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2):
+def build_shooting_star(width, tick, seed):
+    """A shooting star streaking across the sky right now, as (row, col, text), or None (most of the time).
+
+    Each SHOOTING_STAR_WINDOW of ticks has a SHOOTING_STAR_CHANCE of one star at a random moment, decided
+    from the seed, so a run's sky is random but the same tick always gives the same answer.
+    """
+    window, tick_in_window = divmod(tick, SHOOTING_STAR_WINDOW)
+    rng = random.Random(f'{seed}:{window}')
+    if rng.random() >= SHOOTING_STAR_CHANCE:
+        return None
+    start = rng.randrange(SHOOTING_STAR_WINDOW - SHOOTING_STAR_TICKS)
+    step = tick_in_window - start
+    if not 0 <= step < SHOOTING_STAR_TICKS:
+        return None
+
+    going_right = rng.random() < 0.5
+    distance = (SHOOTING_STAR_TICKS - 1) * SHOOTING_STAR_SPEED
+    start_col = rng.randrange(max(1, width - 3 - distance))
+    row = step * SKY_HEIGHT // SHOOTING_STAR_TICKS  # falls from the top row to the bottom one
+    if going_right:
+        col, text = start_col + step * SHOOTING_STAR_SPEED, '--*'
+    else:
+        col, text = start_col + distance - step * SHOOTING_STAR_SPEED, '*--'
+    return row, col, text
+
+
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
-    the moon in its real phase and stars by night, and a red sun, glowing clouds and the first
-    (or last) stars at dusk and dawn.
+    the moon in its real phase, stars and the odd shooting star by night, and a red sun, glowing
+    clouds and the first (or last) stars at dusk and dawn.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -609,6 +640,11 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2):
     else:
         if body:
             place(body_row, body_col, body, 'moon')
+        streak = build_shooting_star(width, tick, seed)
+        if streak:
+            row, col, text = streak
+            if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon
+                place(row, col, text, 'shooting_star')
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
 
@@ -663,8 +699,9 @@ def build_ground(width):
 def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
-    Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, grass, claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row
-    or in the last column, because curses raises an error when writing the window's bottom-right corner.
+    Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, shooting_star, grass, claude,
+    guard, pot, cloud, doctor. Nothing is placed on the bottom row or in the last column, because
+    curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
     """
@@ -705,7 +742,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
-        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age):
+        for row, col, text, color in build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed):
             add(row, col, text, color)
     else:
         top = (usable - block_height) // 2
@@ -878,6 +915,7 @@ def run_live(screen, forced_mood=None, interface=None):
         'cloud': 0,  # the terminal's own text color, so clouds show on light and dark themes
         'doctor': curses.A_BOLD,  # a white coat, in the terminal's own text color
         'sunset': curses.color_pair(2) | curses.A_BOLD,  # 8-color terminals have no orange
+        'shooting_star': curses.color_pair(4) | curses.A_BOLD,
     }
 
     vitals = Vitals(forced_mood, interface)

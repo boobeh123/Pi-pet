@@ -22,7 +22,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8):
+                moon_age=14.8, sky_seed=0):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -41,6 +41,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.adguard_running = adguard_running
     vitals.pi_vitals_running = pi_vitals_running
     vitals.moon_age = moon_age
+    vitals.sky_seed = sky_seed
     return vitals
 
 
@@ -562,6 +563,64 @@ class TwilightTest(unittest.TestCase):
             with self.subTest(width=width):
                 self.assertEqual(piPet.star_spots(width, 2), night[:2])
                 self.assertEqual(piPet.star_spots(width, width // 8), night, 'the same width gives the same stars')
+
+
+class ShootingStarTest(unittest.TestCase):
+    WINDOWS = 300
+
+    def streak_ticks(self, seed, windows=WINDOWS, width=80):
+        """Every tick with a shooting star, found without scanning all the empty ones."""
+        ticks = []
+        for window in range(windows):
+            base = window * piPet.SHOOTING_STAR_WINDOW
+            rng = random.Random(f'{seed}:{window}')
+            if rng.random() < piPet.SHOOTING_STAR_CHANCE:
+                start = rng.randrange(piPet.SHOOTING_STAR_WINDOW - piPet.SHOOTING_STAR_TICKS)
+                ticks.extend(range(base + start, base + start + piPet.SHOOTING_STAR_TICKS))
+        return ticks
+
+    def test_about_one_every_three_minutes(self):
+        windows_with_a_star = {tick // piPet.SHOOTING_STAR_WINDOW for tick in self.streak_ticks(seed=1)}
+        self.assertTrue(0.2 < len(windows_with_a_star) / self.WINDOWS < 0.45, len(windows_with_a_star))
+
+    def test_streak_crosses_and_falls(self):
+        ticks = self.streak_ticks(seed=1, windows=30)
+        first = ticks[:piPet.SHOOTING_STAR_TICKS]
+        frames = [piPet.build_shooting_star(80, tick, seed=1) for tick in first]
+        self.assertTrue(all(frames))
+        self.assertIsNone(piPet.build_shooting_star(80, first[0] - 1, seed=1))
+        self.assertIsNone(piPet.build_shooting_star(80, first[-1] + 1, seed=1))
+        rows = [row for row, _, _ in frames]
+        self.assertEqual((rows[0], rows[-1]), (0, piPet.SKY_HEIGHT - 1))
+        self.assertEqual(rows, sorted(rows), 'it should only fall')
+        steps = {later[1] - earlier[1] for earlier, later in zip(frames, frames[1:])}
+        self.assertIn(steps, ({piPet.SHOOTING_STAR_SPEED}, {-piPet.SHOOTING_STAR_SPEED}))
+        self.assertEqual({text for _, _, text in frames}, {'--*'} if steps == {piPet.SHOOTING_STAR_SPEED} else {'*--'})
+
+    def test_runs_get_different_skies(self):
+        self.assertNotEqual(self.streak_ticks(seed=1, windows=50), self.streak_ticks(seed=2, windows=50))
+
+    def test_only_at_night(self):
+        for tick in self.streak_ticks(seed=0, windows=60):
+            colors = {color for *_, color in piPet.build_sky(80, 12.0, tick, seed=0)}
+            self.assertNotIn('shooting_star', colors)
+
+    def test_night_sky_with_streaks_never_overlaps_or_spills(self):
+        drawn = 0
+        for width in (40, 80, 120):
+            for moon_age in (0.2, 7.4, 14.8):
+                for hour in (19.0, 0.0, 4.5):
+                    for tick in self.streak_ticks(seed=width, windows=40, width=width):
+                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width)
+                        drawn += any(color == 'shooting_star' for *_, color in cells)
+                        seen = set()
+                        for row, col, text, _ in cells:
+                            with self.subTest(width=width, moon_age=moon_age, hour=hour, tick=tick, text=text):
+                                self.assertTrue(0 <= row < piPet.SKY_HEIGHT and col >= 0 and col + len(text) <= width - 1)
+                                for offset in range(len(text)):
+                                    self.assertNotIn((row, col + offset), seen)
+                                    seen.add((row, col + offset))
+        self.assertGreater(drawn, 100)
 
 
 class CloudTest(unittest.TestCase):
