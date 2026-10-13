@@ -3,10 +3,10 @@
 A little raspberry that lives in the terminal and reacts to the Raspberry Pi's real vitals.
 
 <p align="center">
-  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant, while the sky changes from a moonlit night with a ringed planet and a shooting star, through a red dawn and a cloudy day, to dusk and night again. The pet is petted and hops with hearts, sleeps, wakes up groggy, gets busy, surfs, overheats, gets hungry, stuffed, dizzy and lonely, with red alerts under its live stats when something's wrong" width="720">
+  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant. Under a moonlit night sky with a ringed planet, a shooting star goes by and the pet says make a wish; it's petted and hops with hearts while the pals cheer; a watering can waters the plant; the help page explains the scene. Then the sky turns from a red dawn and a cloudy day to dusk, the pet sleeps, wakes up groggy, gets busy, surfs, overheats, gets hungry, stuffed and dizzy with red alerts under its stats, celebrates Halloween with bats and a jack-o'-lantern, and ends lonely and offline" width="720">
 </p>
 
-<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night and every mood fit in 29 seconds.</sub>
+<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night, Halloween and every mood fit in 35 seconds.</sub>
 
 ## Moods
 
