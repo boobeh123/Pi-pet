@@ -1364,6 +1364,10 @@ class HelpTest(unittest.TestCase):
         for label in ('Mood', 'Sky', 'Pals', 'Plant', 'Alerts', 'Keys'):
             self.assertIn(label, labels)
 
+    def test_keys_fit_on_one_row_at_80_columns(self):
+        keys = next(text for label, text, _ in piPet.build_help(make_vitals(), 'content') if label == 'Keys')
+        self.assertLessEqual(len(keys), 80 - 13, 'the help text column starts at 12 and stops before the last column')
+
     def test_alerts_show_in_red(self):
         cells, _ = self.help_rows(online=False)
         self.assertIn(('offline', 'alert'), [(text, color) for *_, text, color in cells])

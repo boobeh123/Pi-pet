@@ -1032,7 +1032,7 @@ def build_help(vitals, mood, memories=None, today=None):
         lines.append(('Today', HOLIDAY_DESCRIPTIONS[vitals.holiday], 'plain'))
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
-    lines.append(('Keys', 'p to pet  ·  w to water the plant  ·  ? to close this help  ·  q to quit', 'plain'))
+    lines.append(('Keys', 'p to pet  ·  w to water  ·  ? closes this page  ·  q to quit', 'plain'))
     return lines
 
 
