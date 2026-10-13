@@ -45,7 +45,7 @@ python3 piPet.py --iface eth0 # watch one network interface (default: whichever 
 python3 piPet.py --help       # list the options
 ```
 
-In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky. A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
+In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky, and the pet says "make a wish!" A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
 
 ## Friends
 
@@ -86,7 +86,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-141 standard-library tests, no sensors needed. They check:
+146 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -106,6 +106,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - shooting stars: about one every three minutes, crossing and falling over 1.5 seconds, a different schedule each run, night only, and never overlapping the moon or stars
 - the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
 - the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
+- wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement

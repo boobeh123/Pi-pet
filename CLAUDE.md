@@ -49,6 +49,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
 - **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
   - `press(key, now)` handles keys (p pets, ? or h toggles `show_help`) and returns False to quit;
   - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
+  - `notice(cells, now)` looks at each drawn frame: a shooting star appearing starts a `WISH_SECONDS` "make a wish!" (`wish_until`), which petting blocks and the saying rotation waits for.
   - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
 - **`pick_saying()`**: calm moods (`CHATTY_MOODS`) sometimes use a friend line (`CLAUDE_SAYINGS`, `GUARD_SAYINGS`, `PLANT_SAYINGS`) instead of their own `SAYINGS`.

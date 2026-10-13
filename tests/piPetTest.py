@@ -934,6 +934,59 @@ class LiveStateTest(unittest.TestCase):
         self.assertIn(petted.saying, piPet.SAYINGS['happy'])
 
 
+class WishTest(unittest.TestCase):
+    STREAK = [(0, 40, '--*', 'shooting_star')]
+    NIGHT = [(1, 10, '.', 'plain')]
+
+    def make_state(self):
+        vitals = make_vitals()
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0))
+
+    def test_a_shooting_star_brings_a_wish_for_a_few_seconds(self):
+        state = self.make_state()
+        state.step(1, now=10.0)
+        state.notice(self.STREAK, now=10.0)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+        state.step(2, now=10.0 + piPet.WISH_SECONDS - 0.1)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+        state.step(3, now=10.0 + piPet.WISH_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['content'])
+
+    def test_one_wish_per_streak(self):
+        state = self.make_state()
+        state.notice(self.STREAK, now=10.0)
+        state.step(1, now=10.0 + piPet.WISH_SECONDS)  # the wish is over...
+        state.notice(self.STREAK, now=10.0 + piPet.WISH_SECONDS)  # ...but it's the same streak
+        self.assertNotEqual(state.saying, piPet.WISH_SAYING)
+        state.notice(self.NIGHT, now=20.0)
+        state.notice(self.STREAK, now=30.0)  # a new streak
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_the_wish_survives_the_saying_rotation(self):
+        state = self.make_state()
+        state.notice(self.STREAK, now=9.0)
+        state.step(piPet.FPS * 10, now=10.0)  # time for a new saying, but the pet is wishing
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_a_real_night_sky_brings_the_wish(self):
+        vitals = make_vitals(hour=22.0, sky_seed=1)
+        vitals.refresh = lambda: None
+        state = piPet.LiveState(vitals, rng=random.Random(0))
+        streak_tick = next(tick for tick in range(10_000) if piPet.build_shooting_star(80, tick, seed=1))
+        for tick in range(streak_tick - 2, streak_tick + 1):
+            mood = state.step(tick, now=tick / piPet.FPS)
+            state.notice(piPet.layout(24, 80, mood, tick, state.saying, vitals), now=tick / piPet.FPS)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_no_wish_while_being_petted(self):
+        state = self.make_state()
+        state.press(ord('p'), now=10.0)
+        state.step(1, now=10.0)
+        state.notice(self.STREAK, now=10.5)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+
+
 class HelpTest(unittest.TestCase):
     def help_rows(self, height=24, width=80, mood='content', **readings):
         cells = piPet.layout(height, width, mood, 1, 'hi', make_vitals(**readings), show_help=True)

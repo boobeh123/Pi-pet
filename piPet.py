@@ -55,7 +55,9 @@ PLANET_DRIFT = 3  # columns per day; like a real planet it stays put all night a
 SHOOTING_STAR_WINDOW = FPS * 60  # each minute of night has one chance of a shooting star...
 SHOOTING_STAR_CHANCE = 1 / 3     # ...so about one every three minutes
 SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
-SHOOTING_STAR_SPEED = 3          # columns per tick  # half a column a second at 4 FPS
+SHOOTING_STAR_SPEED = 3          # columns per tick
+WISH_SAYING = 'make a wish!'     # what the pet says when it sees a shooting star...
+WISH_SECONDS = 4                 # ...and for how long  # half a column a second at 4 FPS
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
@@ -1078,6 +1080,8 @@ class LiveState:
         self.was_petted = False
         self.claude_was_here = vitals.claude_here
         self.show_help = False
+        self.wish_until = 0
+        self.streak_on_screen = False
 
     def press(self, key, now):
         """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
@@ -1095,13 +1099,18 @@ class LiveState:
         """Move on one frame: sensors every 2 seconds, and a new thing to say every ~10 seconds or when
         the mood changes. Returns the mood to show."""
         petted = now < self.petted_until
+        wishing = now < self.wish_until
+        if self.wish_until and not wishing:
+            self.wish_until = 0
+            if not petted:
+                self.saying = pick_saying(self.mood, self.vitals, self.rng)  # the wish is made
         if tick % (FPS * 2) == 0:
             self.vitals.refresh()
             new_mood = self.vitals.mood()
             time_for_new_saying = tick > 0 and tick % (FPS * 10) == 0  # not at tick 0: keep the opening line
-            if not petted and (new_mood != self.mood or time_for_new_saying):
+            if not petted and not wishing and (new_mood != self.mood or time_for_new_saying):
                 self.saying = pick_saying(new_mood, self.vitals, self.rng)
-            if self.vitals.claude_here and not self.claude_was_here and not petted:
+            if self.vitals.claude_here and not self.claude_was_here and not petted and not wishing:
                 self.saying = CLAUDE_GREETING
             self.claude_was_here = self.vitals.claude_here
             self.mood = new_mood
@@ -1109,6 +1118,14 @@ class LiveState:
             self.saying = pick_saying(self.mood, self.vitals, self.rng)  # back to its real mood
         self.was_petted = petted
         return 'happy' if petted else self.mood
+
+    def notice(self, cells, now):
+        """Look at the frame that was just drawn: a shooting star appearing makes the pet say WISH_SAYING."""
+        streak = any(color == 'shooting_star' for *_, color in cells)
+        if streak and not self.streak_on_screen and now >= self.petted_until:
+            self.saying = WISH_SAYING
+            self.wish_until = now + WISH_SECONDS
+        self.streak_on_screen = streak
 
 
 def curses_colors():
@@ -1160,6 +1177,7 @@ def run_live(screen, forced_mood=None, interface=None):
         for row, col, text, color in cells:
             screen.addstr(row, col, text, colors[color])
         screen.refresh()
+        state.notice(cells, now)
         tick += 1
         time.sleep(1 / FPS)
 
