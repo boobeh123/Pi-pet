@@ -25,6 +25,8 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 | Sleepy | Load under 0.3 and almost no network traffic | Eyes closed, floating Zs |
 | Content | Anything else | Smiles and blinks |
 
+**What am I looking at?** Press `?` in the live view for a page that explains the scene from the Pi's real readings: why the pet is in its mood (with the numbers), what's in the sky (the moon's phase, why there are that many clouds), why each pal is visiting, how the plant has grown, and any alerts. Press `?` again to go back.
+
 **Pet it:** press `p` in the live view and it's happy for 3 seconds: `^‿^` face, a little hop, and red `<3` hearts floating up.
 
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
@@ -36,7 +38,7 @@ It also says something to fit its mood, and changes the line every ~10 seconds. 
 Python 3 standard library only, so there's nothing to install.
 
 ```bash
-python3 piPet.py              # live: press p to pet it, q to quit
+python3 piPet.py              # live: press p to pet it, ? for help, q to quit
 python3 piPet.py --once       # print a snapshot of the whole scene and exit (colored in a terminal; NO_COLOR=1 turns colors off)
 python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
@@ -84,7 +86,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-131 standard-library tests, no sensors needed. They check:
+141 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -104,6 +106,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - shooting stars: about one every three minutes, crossing and falling over 1.5 seconds, a different schedule each run, night only, and never overlapping the moon or stars
 - the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
 - the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
+- the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts

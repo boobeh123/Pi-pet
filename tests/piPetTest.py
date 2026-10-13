@@ -169,7 +169,7 @@ class LayoutTest(unittest.TestCase):
         cells = piPet.layout(24, 80, 'content', 1, 'just vibing', make_vitals())
         texts = [text for _, _, text, _ in cells]
         self.assertIn('(  just vibing  )', texts)
-        self.assertIn('p to pet  ·  q to quit', texts)
+        self.assertIn('p to pet  ·  ? for help  ·  q to quit', texts)
         self.assertTrue(any(text.startswith('temp ') for text in texts), 'full status line expected')
 
     def test_tiny_window_shows_a_message(self):
@@ -934,6 +934,100 @@ class LiveStateTest(unittest.TestCase):
         self.assertIn(petted.saying, piPet.SAYINGS['happy'])
 
 
+class HelpTest(unittest.TestCase):
+    def help_rows(self, height=24, width=80, mood='content', **readings):
+        cells = piPet.layout(height, width, mood, 1, 'hi', make_vitals(**readings), show_help=True)
+        rows = {}
+        for row, col, text, color in sorted(cells):
+            rows.setdefault(row, []).append((col, text, color))
+        return cells, {row: ' '.join(text for _, text, _ in parts) for row, parts in rows.items()}
+
+    def test_format_duration(self):
+        cases = [(45, '45 s'), (12 * 60, '12 min'), (3 * 3600 + 5 * 60, '3 h 5 min'), (86400 + 4 * 3600, '1 day 4 h'),
+                 (2 * 86400 + 3600, '2 days 1 h')]
+        for seconds, text in cases:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(piPet.format_duration(seconds), text)
+
+    def test_moon_phase_names_follow_the_shapes(self):
+        cases = [(0.2, 'new moon'), (2.5, 'waxing crescent'), (7.4, 'first quarter'), (14.8, 'full moon'),
+                 (22.1, 'last quarter'), (26.5, 'waning crescent')]
+        for age, name in cases:
+            with self.subTest(age=age):
+                self.assertEqual(piPet.MOON_PHASE_NAMES[piPet.moon_eighth(age)], name)
+
+    def test_every_mood_is_explained_with_its_reading(self):
+        cases = [
+            ('dizzy', dict(undervoltage=True), 'undervoltage'),
+            ('hot', dict(temp_c=73.8), '73.8°C'),
+            ('stuffed', dict(disk_used_percent=93.2), '93% full'),
+            ('hungry', dict(memory_free_percent=6.8), '7% of memory'),
+            ('groggy', dict(uptime_sec=150), '2 min ago'),
+            ('lonely', dict(online=False), 'no route'),
+            ('busy', dict(load=2.6), 'load 2.60'),
+            ('surfing', dict(net_rate=420 * 1024), '420.0 KB/s on wlan0'),
+            ('sleepy', dict(load=0.1, net_rate=512), 'load 0.10'),
+            ('content', dict(), 'normal'),
+            ('happy', dict(), 'petted'),
+        ]
+        for mood, readings, expected in cases:
+            with self.subTest(mood=mood):
+                self.assertIn(expected, piPet.explain_mood(make_vitals(**readings), mood))
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='hot'), 'hot'), 'forced with --mood')
+
+    def test_sky_is_described_for_the_time_of_day(self):
+        cases = [(10.0, 'day: the sun'), (6.5, 'dawn'), (17.5, 'dusk'), (22.0, 'night: full moon')]
+        for hour, expected in cases:
+            with self.subTest(hour=hour):
+                self.assertIn(expected, piPet.describe_sky(make_vitals(hour=hour, load=0.6)))
+        self.assertIn('2 clouds (load 0.60', piPet.describe_sky(make_vitals(hour=10.0, load=0.6)))
+
+    def test_pals_are_explained(self):
+        everyone = piPet.describe_pals(make_vitals(adguard_running=True, pi_vitals_running=True, claude_here=True), 'hot')
+        self.assertEqual([text.split()[0] for text, _ in everyone], ['guard', 'doctor', 'Claude'])
+        self.assertIn('worried', everyone[1][0])
+        alarmed = piPet.describe_pals(make_vitals(adguard_running=True, dns_answering=False), 'content')
+        self.assertEqual(alarmed[0][1], 'alert')
+        self.assertIn('port 53', alarmed[0][0])
+        self.assertIn('stopped', piPet.describe_pals(make_vitals(adguard_running=False), 'content')[0][0])
+        self.assertEqual(piPet.describe_pals(make_vitals(), 'content'), [('nobody is visiting right now', 'plain')])
+
+    def test_plant_is_explained(self):
+        self.assertIn('seedling, up 2 days 0 h (leafy at 3 days)', piPet.describe_plant(make_vitals(uptime_sec=2 * DAY)))
+        self.assertIn('in flower', piPet.describe_plant(make_vitals(uptime_sec=8 * DAY)))
+        self.assertIn('repots', piPet.describe_plant(make_vitals(uptime_sec=8 * DAY)))
+        self.assertIn('no uptime', piPet.describe_plant(make_vitals(uptime_sec=None)))
+
+    def test_help_screen_has_every_section_and_stays_inside(self):
+        for height, width in ((24, 80), (14, 40), (11, 24)):
+            cells, rows = self.help_rows(height, width, adguard_running=True, pi_vitals_running=True, claude_here=True)
+            for row, col, text, _ in cells:
+                with self.subTest(size=(height, width), text=text):
+                    self.assertTrue(0 <= row < height - 1 and col >= 0 and col + len(text) <= width - 1)
+        _, rows = self.help_rows(adguard_running=True, pi_vitals_running=True, claude_here=True)
+        labels = [text.split()[0] for row, text in sorted(rows.items())]
+        for label in ('Mood', 'Sky', 'Pals', 'Plant', 'Alerts', 'Keys'):
+            self.assertIn(label, labels)
+
+    def test_alerts_show_in_red(self):
+        cells, _ = self.help_rows(online=False)
+        self.assertIn(('offline', 'alert'), [(text, color) for *_, text, color in cells])
+
+    def test_help_keys_toggle_the_screen(self):
+        vitals = make_vitals()
+        vitals.refresh = lambda: None
+        state = piPet.LiveState(vitals, rng=random.Random(0))
+        self.assertFalse(state.show_help)
+        state.press(ord('?'), now=0)
+        self.assertTrue(state.show_help)
+        state.press(ord('h'), now=0)
+        self.assertFalse(state.show_help)
+
+    def test_short_key_hint_in_a_narrow_window(self):
+        cells = piPet.layout(piPet.MIN_HEIGHT + 4, piPet.MIN_WIDTH, 'content', 1, 'hi', make_vitals())
+        self.assertIn('p pet · ? help · q quit', [text for *_, text, _ in cells])
+
+
 class AlertTest(unittest.TestCase):
     def test_healthy_pi_has_no_alerts(self):
         self.assertEqual(piPet.build_alerts(make_vitals()), '')
@@ -947,7 +1041,7 @@ class AlertTest(unittest.TestCase):
         rows = {text: row for row, _, text, _ in cells}
         status_row = next(row for text, row in rows.items() if text.startswith('temp '))
         self.assertEqual(rows['offline'], status_row + 1)
-        self.assertIn('p to pet  ·  q to quit', rows)
+        self.assertIn('p to pet  ·  ? for help  ·  q to quit', rows)
 
     def test_alert_line_gives_way_in_a_short_window(self):
         # The surfing pet is the tallest (waves); --mood surfing on an offline Pi still has an alert

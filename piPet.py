@@ -16,6 +16,7 @@ import os
 import random
 import shutil
 import sys
+import textwrap
 import time
 
 FPS = 4
@@ -44,6 +45,8 @@ GROUND_PATTERN = "_.,_'_,."
 SYNODIC_MONTH_DAYS = 29.530588853  # new moon to new moon
 KNOWN_NEW_MOON = 947182440  # 2000-01-06 18:14 UTC
 MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycle; None is the new moon
+MOON_PHASE_NAMES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibbous', 'full moon',
+                    'waning gibbous', 'last quarter', 'waning crescent']
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
 CLOUD_TICKS_PER_COLUMN = 8
@@ -139,6 +142,7 @@ PLANT_STAGES = [
     (3, [('  v  ', 'leaf'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # leafy
     (7, [(' (@) ', 'berry'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # in flower
 ]
+PLANT_STAGE_NAMES = ['sprout', 'seedling', 'leafy', 'in flower']
 PLANT_OFFSET = 24  # columns from the pet's left edge, past the Zs, cloud and hearts
 
 # The Pi Vitals doctor: visits while the Pi Vitals dashboard is listening on its port
@@ -406,6 +410,19 @@ class Vitals:
 # Drawing
 # ---------------------------------------------------------------------------
 
+def format_duration(seconds):
+    """A short, friendly length of time: '45 s', '12 min', '3 h 5 min', '2 days 4 h'."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f'{seconds} s'
+    if seconds < 3600:
+        return f'{seconds // 60} min'
+    if seconds < 86400:
+        return f'{seconds // 3600} h {seconds % 3600 // 60} min'
+    days = seconds // 86400
+    return f'{days} day{"s" if days != 1 else ""} {seconds % 86400 // 3600} h'
+
+
 def format_rate(bytes_per_sec):
     if bytes_per_sec >= 1024 * 1024:
         return f'{bytes_per_sec / 1024 / 1024:.1f} MB/s'
@@ -558,10 +575,14 @@ def moon_age_days(timestamp):
     return ((timestamp - KNOWN_NEW_MOON) / 86400) % SYNODIC_MONTH_DAYS
 
 
+def moon_eighth(age_days):
+    """Which eighth of the lunar cycle the moon is in: 0 new, 2 first quarter, 4 full, 6 last quarter."""
+    return int(age_days / SYNODIC_MONTH_DAYS * 8 + 0.5) % 8
+
+
 def moon_glyph(age_days):
     """The moon's shape as seen from the northern hemisphere, or None at new moon (nothing to see)."""
-    eighth = int(age_days / SYNODIC_MONTH_DAYS * 8 + 0.5) % 8  # 0 new, 2 first quarter, 4 full, 6 last quarter
-    return MOON_SHAPES[eighth]
+    return MOON_SHAPES[moon_eighth(age_days)]
 
 
 def cloud_count(load):
@@ -742,7 +763,93 @@ def build_ground(width):
     return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
 
 
-def layout(height, width, mood, tick, saying, vitals, show_hint=True):
+def explain_mood(vitals, mood):
+    """Why the pet is in this mood, in words, from the reading that decided it."""
+    if mood == 'happy':
+        return 'you just petted me'
+    if vitals.forced_mood:
+        return 'forced with --mood'
+    if mood == 'dizzy':
+        return "the power supply can't keep up (undervoltage alarm)"
+    if mood == 'hot':
+        return f'CPU at {vitals.temp_c:.1f}°C ({HOT_TEMP_C}°C or more is hot)'
+    if mood == 'stuffed':
+        return f'SD card {vitals.disk_used_percent:.0f}% full ({STUFFED_DISK_PERCENT}% or more)'
+    if mood == 'hungry':
+        return f'only {vitals.memory_free_percent:.0f}% of memory free (under {HUNGRY_MEMORY_PERCENT}%)'
+    if mood == 'groggy':
+        return f'the Pi booted {format_duration(vitals.uptime_sec)} ago (under {GROGGY_UPTIME_SEC // 60} min)'
+    if mood == 'lonely':
+        return 'no route to the internet'
+    if mood == 'busy':
+        return f'1-minute load {vitals.load:.2f} ({BUSY_LOAD} or more)'
+    if mood == 'surfing':
+        return f'{format_rate(vitals.net_rate)} on {vitals.interface} ({SURF_BYTES_PER_SEC // 1024} KB/s or more)'
+    if mood == 'sleepy':
+        return f'load {vitals.load:.2f} and only {format_rate(vitals.net_rate)} of traffic'
+    return 'everything looks normal'
+
+
+def describe_sky(vitals):
+    """What's in the sky right now and why, in words."""
+    hour = vitals.hour
+    if 6 <= hour < 18:
+        clouds = cloud_count(vitals.load)
+        weather = f'{clouds} cloud{"s" if clouds != 1 else ""} (load {vitals.load:.2f}: busier means cloudier)'
+        if hour >= 17:
+            return f'dusk: a red sun, the first stars, {weather}'
+        if hour < 7:
+            return f'dawn: a red sun, the last stars, {weather}'
+        return f'day: the sun, {weather}'
+    phase = MOON_PHASE_NAMES[moon_eighth(vitals.moon_age)]
+    return f'night: {phase} (day {vitals.moon_age:.1f} of 29.5), a ringed planet, the odd shooting star'
+
+
+def describe_pals(vitals, mood):
+    """One line per visiting pal, saying why it's here."""
+    lines = []
+    if vitals.adguard_running and vitals.dns_answering is False:
+        lines.append(('guard   AdGuard Home runs, but nothing is bound to port 53!', 'alert'))
+    elif vitals.adguard_running:
+        lines.append(('guard   AdGuard Home is running and serving DNS', 'plain'))
+    elif vitals.adguard_running is False:
+        lines.append(('guard   asleep: AdGuard Home has stopped', 'alert'))
+    if vitals.pi_vitals_running:
+        worried = ', and worried about me' if mood in URGENT_MOODS else ''
+        lines.append((f'doctor  Pi Vitals is listening on port {PI_VITALS_PORT}{worried}', 'plain'))
+    if vitals.claude_here:
+        lines.append(('Claude  a Claude Code session is open', 'plain'))
+    return lines or [('nobody is visiting right now', 'plain')]
+
+
+def describe_plant(vitals):
+    """The plant's stage, the uptime that grew it, and what comes next."""
+    stage = plant_stage(vitals.uptime_sec)
+    if stage is None:
+        return 'none: there is no uptime reading to grow it'
+    grown = f'{PLANT_STAGE_NAMES[stage]}, up {format_duration(vitals.uptime_sec)}'
+    if stage + 1 < len(PLANT_STAGES):
+        next_days = PLANT_STAGES[stage + 1][0]
+        return f'{grown} ({PLANT_STAGE_NAMES[stage + 1]} at {next_days} day{"s" if next_days != 1 else ""})'
+    return f'{grown} (a reboot repots it)'
+
+
+def build_help(vitals, mood):
+    """The help screen: what everything on screen means right now, as (label, text, color) lines."""
+    lines = [
+        ('Mood', f'{mood}: {explain_mood(vitals, mood)}', 'plain'),
+        ('Sky', describe_sky(vitals), 'plain'),
+    ]
+    for i, (text, color) in enumerate(describe_pals(vitals, mood)):
+        lines.append(('Pals' if i == 0 else '', text, color))
+    lines.append(('Plant', describe_plant(vitals), 'plain'))
+    alerts = build_alerts(vitals)
+    lines.append(('Alerts', alerts or 'none', 'alert' if alerts else 'plain'))
+    lines.append(('Keys', 'p to pet  ·  ? to close this help  ·  q to quit', 'plain'))
+    return lines
+
+
+def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
@@ -764,6 +871,16 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
     if height < MIN_HEIGHT or width < MIN_WIDTH:
         message = 'window too small'
         add(height // 2, (width - len(message)) // 2, message, 'dim')
+        return cells
+
+    if show_help:
+        add(1, 2, "Pi Pet: what you're looking at", 'leaf')
+        row = 3
+        for label, text, color in build_help(vitals, mood):
+            add(row, 2, label, 'dim')
+            for line in textwrap.wrap(text, width - 11):  # long lines wrap under their own text
+                add(row, 10, line, color)
+                row += 1
         return cells
 
     pet = build_pet(mood, tick)
@@ -847,7 +964,11 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True):
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
 
     if show_hint and last_row < height - 2:
-        add(height - 2, 1, 'p to pet  ·  q to quit', 'dim')
+        hint = 'p to pet  ·  ? for help  ·  q to quit'
+        if len(hint) <= width - 2:
+            add(height - 2, 1, hint, 'dim')
+        else:
+            add(height - 2, 0, 'p pet · ? help · q quit', 'dim')
     return cells
 
 
@@ -946,6 +1067,7 @@ class LiveState:
 
     QUIT_KEYS = (ord('q'), ord('Q'), 27)  # 27 is Esc
     PET_KEYS = (ord('p'), ord('P'))
+    HELP_KEYS = (ord('?'), ord('h'), ord('H'))
 
     def __init__(self, vitals, rng=random):
         self.vitals = vitals
@@ -955,6 +1077,7 @@ class LiveState:
         self.petted_until = 0
         self.was_petted = False
         self.claude_was_here = vitals.claude_here
+        self.show_help = False
 
     def press(self, key, now):
         """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
@@ -964,6 +1087,8 @@ class LiveState:
             if not self.was_petted:
                 self.saying = self.rng.choice(SAYINGS['happy'])
             self.petted_until = now + PET_SECONDS  # petting again keeps it happy longer
+        if key in self.HELP_KEYS:
+            self.show_help = not self.show_help
         return True
 
     def step(self, tick, now):
@@ -1031,7 +1156,8 @@ def run_live(screen, forced_mood=None, interface=None):
 
         screen.erase()
         height, width = screen.getmaxyx()
-        for row, col, text, color in layout(height, width, shown_mood, tick, state.saying, state.vitals):
+        cells = layout(height, width, shown_mood, tick, state.saying, state.vitals, show_help=state.show_help)
+        for row, col, text, color in cells:
             screen.addstr(row, col, text, colors[color])
         screen.refresh()
         tick += 1

@@ -7,7 +7,7 @@ Pi Pet is a terminal pet (a raspberry) whose mood, scene and visitors follow a R
 ## Commands
 
 ```bash
-python3 piPet.py                       # live view (p to pet, q to quit)
+python3 piPet.py                       # live view (p to pet, ? for help, q to quit)
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
@@ -36,6 +36,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - `mood()` is an ordered priority chain: dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content. `happy` exists only for petting and `--mood`; the sensors never pick it.
 - **Builders** (`build_pet`, `build_extras`, `build_pals`, `build_plant`, `build_sky`, `build_bubble`, `build_status`, `build_alerts`) return text, or cells *relative to the pet's top-left corner*. They never know the window size, except `build_sky` and `build_ground`, which span the full width.
 - **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `curses_colors()` and `ANSI_COLORS`; a test checks the ANSI side.
+  - **`show_help=True`** replaces the whole scene with the help page from `build_help()` (labels plus `explain_mood`, `describe_sky`, `describe_pals`, `describe_plant`, wrapped with `textwrap`). New scene features should get a line there too.
   - **When space runs out, things drop in this order:** scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
@@ -46,7 +47,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
   - Nothing is drawn on the bottom row or in the last column. curses raises an error when writing the bottom-right corner.
 - **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
-  - `press(key, now)` handles keys and returns False to quit;
+  - `press(key, now)` handles keys (p pets, ? or h toggles `show_help`) and returns False to quit;
   - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
   - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
