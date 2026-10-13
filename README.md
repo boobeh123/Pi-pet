@@ -27,9 +27,11 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 
 **What am I looking at?** Press `?` in the live view for a page that explains the scene from the Pi's real readings: why the pet is in its mood (with the numbers), what's in the sky (the moon's phase, why there are that many clouds), why each pal is visiting, how the plant has grown, and any alerts. Press `?` again to go back.
 
-**It remembers you.** The live view keeps a few memories in `~/.local/state/pi-pet/memories.json` (or under `$XDG_STATE_HOME`): the day you first met, how many visits, how many times you've petted it, how many shooting stars you've seen together, and when you last left. If you've been away a day or more it opens with "missed you!", and the `?` page has a "Together" line. Delete the file and it forgets everything; `--once` never reads or writes it.
+**It remembers you.** The live view keeps a few memories in `~/.local/state/pi-pet/memories.json` (or under `$XDG_STATE_HOME`): the day you first met, how many visits, how many times you've petted it and watered the plant, how many shooting stars you've seen together, and when you last left. If you've been away a day or more it opens with "missed you!", and the `?` page has a "Together" line. Delete the file and it forgets everything; `--once` never reads or writes it.
 
 **Pet it:** press `p` in the live view and it's happy for 3 seconds: `^‿^` face, a little hop, and red `<3` hearts floating up.
+
+**Water the plant:** press `w` and a watering can `-=|___|` pours onto the plant for 3 seconds ("the plant says thanks!"). It's just for fun: the plant grows with uptime either way.
 
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
 
@@ -40,7 +42,7 @@ It also says something to fit its mood, and changes the line every ~10 seconds. 
 Python 3 standard library only, so there's nothing to install.
 
 ```bash
-python3 piPet.py              # live: press p to pet it, ? for help, q to quit
+python3 piPet.py              # live: p to pet it, w to water the plant, ? for help, q to quit
 python3 piPet.py --once       # print a snapshot of the whole scene and exit (colored in a terminal; NO_COLOR=1 turns colors off)
 python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
@@ -100,7 +102,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-168 standard-library tests, no sensors needed. They check:
+175 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -123,6 +125,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
+- watering: `w` pours for 3 seconds and counts once per watering, the can's spout over the middle of every plant stage with drops falling between, no can without a plant or room, and the key hint in three widths
 - holidays: every date range, the new art being one column wide, the party hat and its age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement

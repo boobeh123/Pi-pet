@@ -98,7 +98,8 @@ FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one l
 ]
 
 # Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
-DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'shooting_stars_seen': 0, 'last_seen': None}
+DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'times_watered': 0, 'shooting_stars_seen': 0,
+                    'last_seen': None}
 MISSED_YOU_SECONDS = 86400  # away this long or more, and the pet says...
 MISSED_YOU_SAYING = 'missed you!'
 
@@ -113,6 +114,9 @@ HUNGRY_MEMORY_PERCENT = 10  # less memory than this still available
 GROGGY_UPTIME_SEC = 5 * 60  # booted less than this long ago
 
 PET_SECONDS = 3  # how long the pet stays happy after you press p
+WATER_SECONDS = 3  # how long the watering can pours after you press w
+WATERING_CAN = ['  .---.', '-=|___|']  # its spout, on the left, pours onto the plant
+WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
@@ -890,6 +894,16 @@ def build_ground(width, holiday=None, tick=0):
     return pieces
 
 
+def build_watering(drop_rows, tick):
+    """The watering can and its falling drops as (row, col, text, color) from the can's top-left corner,
+    which is also where its spout pours. drop_rows is how many rows the water falls before the plant."""
+    cells = [(i, 0, line, 'plain') for i, line in enumerate(WATERING_CAN)]
+    for row in range(len(WATERING_CAN), len(WATERING_CAN) + drop_rows):
+        if (row - tick) % 2 == 0:  # every other row has a drop, and they move down a row each tick
+            cells.append((row, 0, "'", 'extra'))
+    return cells
+
+
 def build_pumpkin(tick):
     """The Halloween jack-o'-lantern as (text, color) lines; its candle flickers."""
     flame = 'sunset' if tick // 2 % 3 == 0 else 'pumpkin'
@@ -981,6 +995,8 @@ def describe_memories(memories, today):
         return f'{number} {thing}{"" if number == 1 else "s"}'
     parts.append(count(memories['visits'], 'visit'))
     parts.append(f'petted {count(memories["times_petted"], "time")}')
+    if memories['times_watered']:
+        parts.append(f'plant watered {count(memories["times_watered"], "time")}')
     parts.append(f'{count(memories["shooting_stars_seen"], "shooting star")} seen')
     return '  ·  '.join(parts)
 
@@ -1000,11 +1016,12 @@ def build_help(vitals, mood, memories=None, today=None):
         lines.append(('Today', HOLIDAY_DESCRIPTIONS[vitals.holiday], 'plain'))
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
-    lines.append(('Keys', 'p to pet  ·  ? to close this help  ·  q to quit', 'plain'))
+    lines.append(('Keys', 'p to pet  ·  w to water the plant  ·  ? to close this help  ·  q to quit', 'plain'))
     return lines
 
 
-def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False, memories=None):
+def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False, memories=None,
+           watering=False):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
@@ -1099,8 +1116,14 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     plant = build_plant(vitals.uptime_sec)
     plant_left = left + PLANT_OFFSET
     if plant and plant_left + len(plant[0][0]) <= width - 1:
+        plant_top = feet_row - len(plant) + 1
         for i, (text, color) in enumerate(plant):
-            add(feet_row - len(plant) + 1 + i, plant_left, text, color)
+            add(plant_top + i, plant_left, text, color)
+        # The watering can hangs in the pet's top rows, its spout over the plant's middle
+        can_left = plant_left + 2
+        if watering and can_left + len(WATERING_CAN[0]) <= width - 1:
+            for row, col, text, color in build_watering(plant_top - pet_top - len(WATERING_CAN), tick):
+                add(pet_top + row, can_left + col, text, color)
 
     # At Halloween a jack-o'-lantern sits just past the plant, when there's room
     pumpkin_left = left + PUMPKIN_OFFSET
@@ -1128,8 +1151,9 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
 
     if show_hint and last_row < height - 2:
-        hint = 'p to pet  ·  ? for help  ·  q to quit'
-        if len(hint) <= width - 2:
+        hints = ['p to pet  ·  w to water  ·  ? for help  ·  q to quit', 'p pet · w water · ? help · q quit']
+        hint = next((hint for hint in hints if len(hint) <= width - 2), None)
+        if hint:
             add(height - 2, 1, hint, 'dim')
         else:
             add(height - 2, 0, 'p pet · ? help · q quit', 'dim')
@@ -1250,7 +1274,7 @@ def load_memories(path):
         return memories
     if not isinstance(saved, dict):
         return memories
-    for key in ('visits', 'times_petted', 'shooting_stars_seen'):
+    for key in ('visits', 'times_petted', 'times_watered', 'shooting_stars_seen'):
         value = saved.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             memories[key] = value
@@ -1302,6 +1326,7 @@ class LiveState:
     QUIT_KEYS = (ord('q'), ord('Q'), 27)  # 27 is Esc
     PET_KEYS = (ord('p'), ord('P'))
     HELP_KEYS = (ord('?'), ord('h'), ord('H'))
+    WATER_KEYS = (ord('w'), ord('W'))
 
     def __init__(self, vitals, rng=random, memories=None, wall_time=None):
         """memories: what load_memories found, or None to remember nothing. wall_time: time.time() now."""
@@ -1323,6 +1348,7 @@ class LiveState:
         self.show_help = False
         self.wish_until = 0
         self.streak_on_screen = False
+        self.watering_until = 0
 
     def press(self, key, now):
         """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
@@ -1336,13 +1362,24 @@ class LiveState:
             self.petted_until = now + PET_SECONDS  # petting again keeps it happy longer
         if key in self.HELP_KEYS:
             self.show_help = not self.show_help
+        if key in self.WATER_KEYS:
+            if now >= self.watering_until:
+                self.remember('times_watered')  # once per watering, not per key press
+                if now >= self.petted_until:
+                    self.saying = WATER_SAYING
+            self.watering_until = now + WATER_SECONDS
         return True
+
+    def watering(self, now):
+        return now < self.watering_until
 
     def step(self, tick, now):
         """Move on one frame: sensors every 2 seconds, and a new thing to say every ~10 seconds or when
         the mood changes. Returns the mood to show."""
         petted = now < self.petted_until
         wishing = now < self.wish_until
+        if self.saying == WATER_SAYING and not self.watering(now) and not petted:
+            self.saying = pick_saying(self.mood, self.vitals, self.rng)  # done watering
         if self.wish_until and not wishing:
             self.wish_until = 0
             if not petted:
@@ -1430,7 +1467,7 @@ def run_live(screen, forced_mood=None, interface=None):
             screen.erase()
             height, width = screen.getmaxyx()
             cells = layout(height, width, shown_mood, tick, state.saying, state.vitals,
-                           show_help=state.show_help, memories=state.memories)
+                           show_help=state.show_help, memories=state.memories, watering=state.watering(now))
             for row, col, text, color in cells:
                 screen.addstr(row, col, text, colors[color])
             screen.refresh()

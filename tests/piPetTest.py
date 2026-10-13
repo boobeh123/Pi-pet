@@ -175,7 +175,7 @@ class LayoutTest(unittest.TestCase):
         cells = piPet.layout(24, 80, 'content', 1, 'just vibing', make_vitals())
         texts = [text for _, _, text, _ in cells]
         self.assertIn('(  just vibing  )', texts)
-        self.assertIn('p to pet  ·  ? for help  ·  q to quit', texts)
+        self.assertIn('p to pet  ·  w to water  ·  ? for help  ·  q to quit', texts)
         self.assertTrue(any(text.startswith('temp ') for text in texts), 'full status line expected')
 
     def test_tiny_window_shows_a_message(self):
@@ -277,12 +277,14 @@ class SceneTest(unittest.TestCase):
                 for mood in piPet.FACES:
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
-                                             make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
+                                             make_vitals(hour=hour, claude_here=True,
+                                                         uptime_sec=(8 * DAY, 0.5 * DAY)[tick % 2],  # flower or sprout
                                                          pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
                                                          day_of_year=tick * 15,
                                                          adguard_running=tick % 2 == 0,  # guard awake or asleep
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
-                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]))
+                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]),
+                                             watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -828,6 +830,75 @@ class HolidayTest(unittest.TestCase):
         self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
 
 
+class WaterTest(unittest.TestCase):
+    def make_state(self, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0), memories=dict(piPet.DEFAULT_MEMORIES))
+
+    def watering_cells(self, uptime_sec=8 * DAY, width=80, tick=1):
+        cells = piPet.layout(24, width, 'content', tick, 'hi', make_vitals(uptime_sec=uptime_sec), watering=True)
+        return cells, [cell for cell in cells if cell[2] in piPet.WATERING_CAN or (cell[2] == "'" and cell[3] == 'extra')]
+
+    def test_watering_art_lines_up(self):
+        self.assertEqual(len({len(line) for line in piPet.WATERING_CAN}), 1)
+        for char in ''.join(piPet.WATERING_CAN):
+            self.assertTrue(is_one_column(char))
+
+    def test_w_waters_for_a_few_seconds_and_the_plant_says_thanks(self):
+        state = self.make_state()
+        state.press(ord('w'), now=10.0)
+        self.assertTrue(state.watering(10.0))
+        self.assertEqual(state.saying, piPet.WATER_SAYING)
+        state.step(1, now=10.0 + piPet.WATER_SECONDS - 0.1)
+        self.assertEqual(state.saying, piPet.WATER_SAYING)
+        self.assertFalse(state.watering(10.0 + piPet.WATER_SECONDS))
+        state.step(2, now=10.0 + piPet.WATER_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['content'], 'back to its own lines when the can is put away')
+
+    def test_each_watering_counts_once(self):
+        state = self.make_state()
+        state.press(ord('w'), now=10.0)
+        state.press(ord('w'), now=11.0)  # still pouring
+        state.press(ord('w'), now=20.0)  # a new watering
+        self.assertEqual(state.unsaved, {'times_watered': 2})
+
+    def test_petting_keeps_its_line_while_watering(self):
+        state = self.make_state()
+        state.press(ord('p'), now=10.0)
+        state.step(1, now=10.0)
+        state.press(ord('w'), now=10.5)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+
+    def test_the_can_pours_onto_the_plant(self):
+        for uptime_sec in (0.5 * DAY, 2 * DAY, 4 * DAY, 8 * DAY):
+            cells, watering = self.watering_cells(uptime_sec)
+            pot = next((row, col) for row, col, _, color in cells if color == 'pot')
+            plant_top = min(row for row, col, text, color in cells
+                            if color in ('leaf', 'berry', 'pot') and col >= pot[1] and len(text) == 5)
+            spout = next((row, col) for row, col, text, _ in watering if text == piPet.WATERING_CAN[1])
+            # A tall plant leaves room for one drop row, which drips every other frame, so look at a few frames
+            drops = [(row, col) for tick in range(1, 5) for row, col, text, _ in self.watering_cells(uptime_sec, tick=tick)[1]
+                     if text == "'"]
+            with self.subTest(days=uptime_sec / DAY):
+                self.assertEqual(spout[1], pot[1] + 2, 'the spout is over the middle of the plant')
+                self.assertTrue(drops)
+                self.assertTrue(all(col == spout[1] and spout[0] < row < plant_top for row, col in drops))
+
+    def test_no_can_without_a_plant_or_room(self):
+        self.assertEqual(self.watering_cells(uptime_sec=None)[1], [])
+        self.assertEqual(self.watering_cells(width=40)[1], [])
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(uptime_sec=8 * DAY))
+        self.assertFalse([cell for cell in cells if cell[2] in piPet.WATERING_CAN])
+
+    def test_key_hint_fits_the_window(self):
+        for width, hint in ((80, 'p to pet  ·  w to water  ·  ? for help  ·  q to quit'),
+                            (40, 'p pet · w water · ? help · q quit'), (piPet.MIN_WIDTH, 'p pet · ? help · q quit')):
+            cells = piPet.layout(24, width, 'content', 1, 'hi', make_vitals())
+            with self.subTest(width=width):
+                self.assertIn(hint, [text for *_, text, _ in cells])
+
+
 class OnceTest(unittest.TestCase):
     def test_render_lines_places_text_and_trims_blank_space(self):
         cells = [(1, 2, 'hi', 'plain'), (3, 0, 'there', 'leaf')]
@@ -1146,7 +1217,8 @@ class MemoriesTest(unittest.TestCase):
         self.assertEqual(memories, {**piPet.DEFAULT_MEMORIES, 'shooting_stars_seen': 4})
 
     def test_save_and_load(self):
-        memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'shooting_stars_seen': 1, 'last_seen': 123.5}
+        memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'times_watered': 2, 'shooting_stars_seen': 1,
+                    'last_seen': 123.5}
         self.assertTrue(piPet.save_memories(self.path, memories))
         self.assertEqual(piPet.load_memories(self.path), memories)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), ['memories.json'], 'no temporary file left behind')
@@ -1192,9 +1264,12 @@ class MemoriesTest(unittest.TestCase):
         self.assertEqual(state.unsaved, {})
 
     def test_the_help_screen_tells_your_story(self):
-        memories = {'first_met': '2026-10-08', 'visits': 1, 'times_petted': 12, 'shooting_stars_seen': 3, 'last_seen': None}
+        memories = {'first_met': '2026-10-08', 'visits': 1, 'times_petted': 12, 'times_watered': 0, 'shooting_stars_seen': 3,
+                    'last_seen': None}
         line = piPet.describe_memories(memories, today=datetime.date(2026, 10, 12))
         self.assertEqual(line, 'met Oct 8, 2026 (4 days ago)  ·  1 visit  ·  petted 12 times  ·  3 shooting stars seen')
+        watered = piPet.describe_memories({**memories, 'times_watered': 4}, today=datetime.date(2026, 10, 12))
+        self.assertIn('plant watered 4 times', watered)
         self.assertIn('(today)', piPet.describe_memories({**memories, 'first_met': '2026-10-12'}, datetime.date(2026, 10, 12)))
         self.assertIn('(yesterday)', piPet.describe_memories({**memories, 'first_met': '2026-10-11'}, datetime.date(2026, 10, 12)))
         cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True, memories=memories)
@@ -1310,7 +1385,7 @@ class AlertTest(unittest.TestCase):
         rows = {text: row for row, _, text, _ in cells}
         status_row = next(row for text, row in rows.items() if text.startswith('temp '))
         self.assertEqual(rows['offline'], status_row + 1)
-        self.assertIn('p to pet  ·  ? for help  ·  q to quit', rows)
+        self.assertIn('p to pet  ·  w to water  ·  ? for help  ·  q to quit', rows)
 
     def test_alert_line_gives_way_in_a_short_window(self):
         # The surfing pet is the tallest (waves); --mood surfing on an offline Pi still has an alert

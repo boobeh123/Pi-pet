@@ -7,7 +7,7 @@ Pi Pet is a terminal pet (a raspberry) whose mood, scene and visitors follow a R
 ## Commands
 
 ```bash
-python3 piPet.py                       # live view (p to pet, ? for help, q to quit)
+python3 piPet.py                       # live view (p to pet, w to water, ? for help, q to quit)
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
@@ -43,13 +43,13 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
     - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude.
-    - The plant sits at `PLANT_OFFSET` (24) to the right, and the Halloween jack-o'-lantern at `PUMPKIN_OFFSET` (31).
+    - The plant sits at `PLANT_OFFSET` (24) to the right, and the Halloween jack-o'-lantern at `PUMPKIN_OFFSET` (31). While watering (`layout(..., watering=True)`), the can hangs in pet rows 0-1 with its spout at the plant's middle column, and drops fall from it to the plant's top.
     - Pals and the plant stand on the pet's lowest row (`feet_row`), just above the ground.
     - Nothing goes in the bubble's rows. That was a real bug once.
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
   - Nothing is drawn on the bottom row or in the last column. curses raises an error when writing the bottom-right corner.
 - **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
-  - `press(key, now)` handles keys (p pets, ? or h toggles `show_help`) and returns False to quit;
+  - `press(key, now)` handles keys (p pets, w waters for `WATER_SECONDS`, ? or h toggles `show_help`) and returns False to quit;
   - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
   - `notice(cells, now)` looks at each drawn frame: a shooting star appearing starts a `WISH_SECONDS` "make a wish!" (`wish_until`), which petting blocks and the saying rotation waits for.
   - Memories: `LiveState(memories=..., wall_time=...)` opens with "missed you!" after `MISSED_YOU_SECONDS` away, and `remember(key)` counts pettings (once per petting) and shooting stars into `memories` and `unsaved`. It never touches files: `run_live` loads them with `load_memories`, and saves with `update_memories`, which re-reads the file and adds only the new counts, so two Pi Pets running at once don't overwrite each other. `save_memories` writes a temp file and `os.replace`s it.
