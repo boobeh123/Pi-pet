@@ -49,7 +49,7 @@ MOON_PHASE_NAMES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibb
                     'waning gibbous', 'last quarter', 'waning crescent']
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
-CLOUD_TICKS_PER_COLUMN = 8
+CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 PLANET = '-()-'  # a ringed planet: decorative, not a real planet's position
 PLANET_DRIFT = 3  # columns per day; like a real planet it stays put all night and shifts night to night
 SHOOTING_STAR_WINDOW = FPS * 60  # each minute of night has one chance of a shooting star...
@@ -57,7 +57,7 @@ SHOOTING_STAR_CHANCE = 1 / 3     # ...so about one every three minutes
 SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
 SHOOTING_STAR_SPEED = 3          # columns per tick
 WISH_SAYING = 'make a wish!'     # what the pet says when it sees a shooting star...
-WISH_SECONDS = 4                 # ...and for how long  # half a column a second at 4 FPS
+WISH_SECONDS = 4                 # ...and for how long
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
