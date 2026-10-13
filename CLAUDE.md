@@ -43,7 +43,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
     - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude.
-    - The plant sits at `PLANT_OFFSET` (24) to the right.
+    - The plant sits at `PLANT_OFFSET` (24) to the right, and the Halloween jack-o'-lantern at `PUMPKIN_OFFSET` (31).
     - Pals and the plant stand on the pet's lowest row (`feet_row`), just above the ground.
     - Nothing goes in the bubble's rows. That was a real bug once.
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
@@ -55,6 +55,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - Memories: `LiveState(memories=..., wall_time=...)` opens with "missed you!" after `MISSED_YOU_SECONDS` away, and `remember(key)` counts pettings (once per petting) and shooting stars into `memories` and `unsaved`. It never touches files: `run_live` loads them with `load_memories`, and saves with `update_memories`, which re-reads the file and adds only the new counts, so two Pi Pets running at once don't overwrite each other. `save_memories` writes a temp file and `os.replace`s it.
   - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
+- **Holidays** come from `holiday_on(month, day)` into `vitals.holiday` (and `vitals.year` for the birthday age). They reach the drawing through parameters: `build_pet(..., holiday)` (party hat), `build_sky(..., holiday)` (bats, fireworks, Pi Day clouds), `build_ground(width, holiday, tick)` (Christmas lights, returned as `(col, text, color)` pieces that never overlap) and the pumpkin in `layout()`. `holiday_sayings()` feeds `pick_saying()`, and `HOLIDAY_DESCRIPTIONS` feeds the help page. A new holiday needs an entry in both dicts (a test checks).
 - **`pick_saying()`**: calm moods (`CHATTY_MOODS`) sometimes use a friend line (`CLAUDE_SAYINGS`, `GUARD_SAYINGS`, `PLANT_SAYINGS`) instead of their own `SAYINGS`.
 
 ## Rules the tests enforce

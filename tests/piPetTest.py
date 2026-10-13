@@ -19,13 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import piPet  # noqa: E402  (imported after the path is set)
 
 DAY = 86400
+HOLIDAYS = (None, 'halloween', 'christmas', 'new_year', 'pi_day', 'birthday')
 TICKS = range(24)  # long enough to cover every animation cycle (blink is every 12 ticks)
 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None):
+                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -47,6 +48,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.sky_seed = sky_seed
     vitals.day_of_year = day_of_year
     vitals.dns_answering = dns_answering
+    vitals.holiday = holiday
+    vitals.year = year
     return vitals
 
 
@@ -278,7 +281,8 @@ class SceneTest(unittest.TestCase):
                                                          pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
                                                          day_of_year=tick * 15,
                                                          adguard_running=tick % 2 == 0,  # guard awake or asleep
-                                                         dns_answering=tick % 4 != 0))  # and sometimes alarmed
+                                                         dns_answering=tick % 4 != 0,  # and sometimes alarmed
+                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]))
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -651,7 +655,8 @@ class ShootingStarTest(unittest.TestCase):
             for moon_age in (0.2, 7.4, 14.8):
                 for hour in (19.0, 0.0, 4.5):
                     for tick in self.streak_ticks(seed=width, windows=40, width=width):
-                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width, day_of_year=tick % 366)
+                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width, day_of_year=tick % 366,
+                                                holiday=(None, 'halloween', 'new_year')[tick % 3])
                         drawn += any(color == 'shooting_star' for *_, color in cells)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -693,7 +698,7 @@ class CloudTest(unittest.TestCase):
             for load in (0.0, 1.0, 3.0):
                 for hour in (6.1, 6.5, 9.0, 12.0, 15.0, 17.5, 17.9):  # includes dawn and dusk, with stars
                     for tick in range(0, 1200, 25):
-                        cells = piPet.build_sky(width, hour, tick, load)
+                        cells = piPet.build_sky(width, hour, tick, load, holiday='pi_day' if tick % 2 else None)
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(width=width, load=load, hour=hour, tick=tick, text=text):
@@ -710,6 +715,119 @@ class CloudTest(unittest.TestCase):
                 self.assertTrue(is_one_column(char))
 
 
+class HolidayTest(unittest.TestCase):
+    def layout(self, holiday, hour=21.0, tick=1, width=80, **readings):
+        vitals = make_vitals(holiday=holiday, hour=hour, uptime_sec=4 * DAY, **readings)
+        return piPet.layout(24, width, 'content', tick, 'hi', vitals)
+
+    def test_dates(self):
+        cases = [((10, 24), None), ((10, 25), 'halloween'), ((10, 31), 'halloween'), ((11, 1), None),
+                 ((12, 19), None), ((12, 20), 'christmas'), ((12, 26), 'christmas'), ((12, 27), None),
+                 ((12, 31), 'new_year'), ((1, 1), 'new_year'), ((1, 2), None), ((3, 14), 'pi_day'),
+                 ((10, 8), 'birthday'), ((7, 15), None)]
+        for (month, day), holiday in cases:
+            with self.subTest(date=(month, day)):
+                self.assertEqual(piPet.holiday_on(month, day), holiday)
+
+    def test_new_art_is_one_column_and_lines_up(self):
+        art = ([piPet.PARTY_HAT, 'o'] + piPet.PUMPKIN + piPet.BAT_FRAMES + piPet.PI_DAY_CLOUDS[0]
+               + [text for frame in piPet.FIREWORK_FRAMES for _, _, text in frame])
+        for char in ''.join(art):
+            self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+        self.assertEqual(len(piPet.PARTY_HAT), piPet.PET_WIDTH)
+        self.assertEqual(len({len(line) for line in piPet.PUMPKIN}), 1)
+        self.assertEqual(len({len(line) for line in piPet.PI_DAY_CLOUDS[0]}), 1)
+
+    def test_birthday_party_hat_replaces_the_leaf(self):
+        lines = piPet.build_pet('content', 1, 'birthday')
+        self.assertEqual(lines[0], (piPet.PARTY_HAT, 'sun'))
+        self.assertEqual(piPet.build_pet('content', 1)[0][0], '    \\\\|//    ')
+
+    def test_birthday_lines_know_the_age(self):
+        self.assertIn('I was born today!', piPet.holiday_sayings(make_vitals(holiday='birthday', year=2026)))
+        self.assertIn("I'm 1 today!", piPet.holiday_sayings(make_vitals(holiday='birthday', year=2027)))
+        self.assertEqual(piPet.holiday_sayings(make_vitals()), [])
+
+    def test_jack_o_lantern_sits_on_the_grass_past_the_plant_and_flickers(self):
+        cells = self.layout('halloween')
+        ground_row = next(row for row, _, _, color in cells if color == 'grass')
+        face = [(row, col, color) for row, col, text, color in cells if text == piPet.PUMPKIN[1]]
+        pot_col = next(col for row, col, text, color in cells if color == 'pot')
+        self.assertEqual(face[0][0], ground_row - 1)
+        self.assertGreater(face[0][1], pot_col + 4)
+        flames = {color for tick in TICKS for *_, text, color in self.layout('halloween', tick=tick) if text == piPet.PUMPKIN[1]}
+        self.assertEqual(flames, {'pumpkin', 'sunset'})
+        self.assertFalse([cell for cell in self.layout('halloween', width=40) if cell[2] == piPet.PUMPKIN[1]],
+                         'no room at 40 columns')
+        self.assertFalse([cell for cell in self.layout(None) if cell[2] == piPet.PUMPKIN[1]])
+
+    def test_bats_fly_on_halloween_nights_only(self):
+        def bats(holiday, hour):
+            return [text for tick in TICKS for *_, text, color in piPet.build_sky(80, hour, tick, holiday=holiday)
+                    if text in piPet.BAT_FRAMES]
+        self.assertEqual(set(bats('halloween', 21.0)), set(piPet.BAT_FRAMES), 'they flap')
+        self.assertEqual(bats('halloween', 12.0), [])
+        self.assertEqual(bats(None, 21.0), [])
+
+    def test_christmas_lights_string_along_the_grass(self):
+        for width in (40, 80, 120):
+            pieces = piPet.build_ground(width, 'christmas', tick=0)
+            covered = ''.join(text for _, text, _ in sorted(pieces))
+            with self.subTest(width=width):
+                self.assertEqual(len(covered), width - 1, 'the pieces cover the line exactly once')
+                bulbs = [col for col, text, _ in pieces if text == 'o']
+                self.assertEqual(bulbs, list(range(piPet.LIGHT_SPACING // 2, width - 1, piPet.LIGHT_SPACING)))
+        colors_now = [color for _, text, color in piPet.build_ground(80, 'christmas', tick=0) if text == 'o']
+        colors_later = [color for _, text, color in piPet.build_ground(80, 'christmas', tick=4) if text == 'o']
+        self.assertNotEqual(colors_now, colors_later, 'the colors chase along the string')
+        self.assertEqual(piPet.build_ground(80), [(0, piPet.build_ground(80)[0][1], 'grass')])
+
+    def test_fireworks_light_up_new_years_night(self):
+        windows = 200
+        with_a_firework = sum(
+            any(piPet.build_fireworks(80, window * piPet.FIREWORK_WINDOW + t, seed=3)
+                for t in range(piPet.FIREWORK_WINDOW))
+            for window in range(windows))
+        self.assertTrue(0.5 < with_a_firework / windows < 0.8, with_a_firework)
+        burst_tick = next(t for t in range(5000) if len(piPet.build_fireworks(80, t, seed=3)) == 3)
+        steps = [piPet.build_fireworks(80, t, seed=3) for t in range(burst_tick - 2, burst_tick + 2)]
+        self.assertEqual([len(cells) for cells in steps], [1, 1, 3, 4], 'rocket, rocket, bang, sparks')
+        self.assertEqual(len({color for cells in steps for *_, color in cells}), 1, 'one color per firework')
+        for width in (40, 80, 120):
+            for tick in range(0, 3000, 3):
+                for row, col, text, _ in piPet.build_fireworks(width, tick, seed=width):
+                    self.assertTrue(0 <= row < piPet.SKY_HEIGHT and col >= 0 and col + len(text) <= width - 1)
+        night = {color for t in range(burst_tick - 2, burst_tick + 2)
+                 for *_, color in piPet.build_sky(80, 23.5, t, seed=3, holiday='new_year')}
+        self.assertTrue(night & set(piPet.FIREWORK_COLORS))
+        day = [cell for t in range(burst_tick - 2, burst_tick + 2)
+               for cell in piPet.build_sky(80, 12.0, t, seed=3, holiday='new_year') if cell[2] in ('-*-', "'")]
+        self.assertEqual(day, [], 'fireworks are for the night')
+
+    def test_pi_day_clouds_know_their_digits(self):
+        sky = piPet.build_sky(80, 11.0, 100, load=1.0, holiday='pi_day')
+        self.assertTrue(any('3.14159' in text for *_, text, _ in sky))
+
+    def test_holiday_lines_in_calm_moods_only_on_the_day(self):
+        rng = random.Random(6)
+        halloween = {piPet.pick_saying('content', make_vitals(holiday='halloween'), rng) for _ in range(200)}
+        self.assertTrue(halloween & set(piPet.HOLIDAY_SAYINGS['halloween']))
+        dizzy = {piPet.pick_saying('dizzy', make_vitals(holiday='halloween'), rng) for _ in range(100)}
+        self.assertTrue(dizzy <= set(piPet.SAYINGS['dizzy']))
+
+    def test_help_mentions_the_holiday(self):
+        for holiday, description in piPet.HOLIDAY_DESCRIPTIONS.items():
+            lines = piPet.build_help(make_vitals(holiday=holiday), 'content')
+            with self.subTest(holiday=holiday):
+                self.assertIn(('Today', description, 'plain'), lines)
+        self.assertFalse([line for line in piPet.build_help(make_vitals(), 'content') if line[0] == 'Today'])
+
+    def test_every_holiday_has_lines_and_a_description(self):
+        holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
+        self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
+        self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
+
+
 class OnceTest(unittest.TestCase):
     def test_render_lines_places_text_and_trims_blank_space(self):
         cells = [(1, 2, 'hi', 'plain'), (3, 0, 'there', 'leaf')]
@@ -724,7 +842,8 @@ class OnceTest(unittest.TestCase):
         colors = set()
         for mood in piPet.FACES:
             for hour, running in ((12.0, True), (22.0, False)):
-                vitals = make_vitals(hour=hour, claude_here=True, adguard_running=running, uptime_sec=8 * DAY, online=False)
+                vitals = make_vitals(hour=hour, claude_here=True, adguard_running=running, uptime_sec=8 * DAY, online=False,
+                                     holiday=HOLIDAYS[hash(mood) % len(HOLIDAYS)])
                 colors |= {color for *_, color in piPet.layout(24, 80, mood, 1, 'hi', vitals)}
         self.assertLessEqual(colors, set(piPet.ANSI_COLORS))
 

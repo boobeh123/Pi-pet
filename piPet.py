@@ -37,7 +37,7 @@ ONCE_MAX_HEIGHT = 24
 ANSI_COLORS = {
     'leaf': '1;32', 'berry': '1;31', 'extra': '36', 'plain': '', 'dim': '2', 'alert': '31',
     'sun': '1;33', 'moon': '1', 'grass': '32', 'claude': '33', 'guard': '1;34', 'pot': '33', 'cloud': '', 'doctor': '1',
-    'sunset': '1;31', 'shooting_star': '1;33', 'planet': '35',
+    'sunset': '1;31', 'shooting_star': '1;33', 'planet': '35', 'pumpkin': '1;33',
 }
 
 # Big windows also get a scene: sky across the top and grass under the pet's feet
@@ -60,6 +60,42 @@ SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
 SHOOTING_STAR_SPEED = 3          # columns per tick
 WISH_SAYING = 'make a wish!'     # what the pet says when it sees a shooting star...
 WISH_SECONDS = 4                 # ...and for how long
+
+# Holidays from the real calendar (see holiday_on)
+PI_PET_BIRTHDAY = (10, 8)  # the first commit, Oct 8 2026
+PI_PET_BIRTH_YEAR = 2026
+HOLIDAY_SAYINGS = {
+    'halloween': ['trick or treat!', 'boo!', "I'm dressed as a raspberry"],
+    'christmas': ['happy holidays!', 'look at the lights!', 'cozy season'],
+    'new_year': ['happy new year!', '3... 2... 1...!', 'ooh, fireworks!'],
+    'pi_day': ['happy Pi Day!', '3.14159265...', 'I am the Pi'],
+    'birthday': ['happy birthday to me!', 'is there cake?'],  # plus a line with its age
+}
+HOLIDAY_DESCRIPTIONS = {
+    'halloween': "Halloween week: a jack-o'-lantern, and bats at night",
+    'christmas': 'Christmas week: lights strung along the grass',
+    'new_year': 'New Year: fireworks at night',
+    'pi_day': 'Pi Day (3/14): the clouds know their digits',
+    'birthday': "Pi Pet's birthday (born Oct 8, 2026): a party hat",
+}
+PARTY_HAT = '     /*\\     '  # replaces the leaf on Pi Pet's birthday
+PUMPKIN = [' _)_ ', '(^w^)']  # a jack-o'-lantern: stem, then the carved face
+PUMPKIN_OFFSET = 31  # columns from the pet's left edge, just past the plant
+BAT_FRAMES = ['^v^', '-v-']  # wings up, wings level
+BAT_ROWS = [0, 1, 2, 1]  # bats bob up and down as they fly
+BAT_TICKS_PER_COLUMN = 2
+PI_DAY_CLOUDS = [['.-~~~~~-.', '(3.14159)']]
+LIGHT_COLORS = ['berry', 'leaf', 'sun', 'guard']  # Christmas bulbs: red, green, yellow, blue
+LIGHT_SPACING = 4
+FIREWORK_WINDOW = FPS * 3  # every 3 seconds of New Year's night has a good chance of a firework
+FIREWORK_CHANCE = 2 / 3
+FIREWORK_COLORS = ['berry', 'sun', 'extra', 'planet', 'leaf']
+FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one list per tick
+    [(2, 0, "'")],  # the rocket goes up
+    [(1, 0, '*')],
+    [(0, -1, '\\|/'), (1, -1, '-*-'), (2, -1, '/|\\')],  # bang
+    [(0, -1, '.'), (0, 1, '.'), (2, -1, '.'), (2, 1, '.')],  # sparks fading
+]
 
 # Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
 DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'shooting_stars_seen': 0, 'last_seen': None}
@@ -277,6 +313,22 @@ def read_uptime_sec():
         return None
 
 
+def holiday_on(month, day):
+    """Which holiday a date falls on, or None: Halloween week, Christmas week, New Year (Dec 31 and Jan 1),
+    Pi Day (Mar 14), and Pi Pet's own birthday (Oct 8)."""
+    if (month, day) == (3, 14):
+        return 'pi_day'
+    if (month, day) == PI_PET_BIRTHDAY:
+        return 'birthday'
+    if month == 10 and 25 <= day <= 31:
+        return 'halloween'
+    if month == 12 and 20 <= day <= 26:
+        return 'christmas'
+    if (month, day) in ((12, 31), (1, 1)):
+        return 'new_year'
+    return None
+
+
 def read_process_names():
     """The names of every running process (from /proc/*/comm, so at most 15 characters each)."""
     names = set()
@@ -366,6 +418,8 @@ class Vitals:
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.moon_age = moon_age_days(time.time())
         self.day_of_year = now.tm_yday  # moves the planet a little each night
+        self.year = now.tm_year
+        self.holiday = holiday_on(now.tm_mon, now.tm_mday)
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -452,8 +506,8 @@ def pick_face(mood, tick):
     return frames[0]
 
 
-def build_pet(mood, tick):
-    """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra."""
+def build_pet(mood, tick, holiday=None):
+    """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra (and sun for the party hat)."""
     left_eye, right_eye, mouth = pick_face(mood, tick)
 
     # Busy pet bounces up and down, happy pet hops for joy; surfing pet sways left and right
@@ -485,6 +539,8 @@ def build_pet(mood, tick):
         lines[3] = (f' | (: {mouth} :) | ', 'berry')
     if mood == 'surfing':
         lines.append(('~^~^~^~^~^~^~', 'extra'))
+    if holiday == 'birthday':
+        lines[0] = (PARTY_HAT, 'sun')
 
     lines = [(sway + text, color) for text, color in lines]
     if bounce:
@@ -601,16 +657,16 @@ def cloud_count(load):
     return 2 if load < 1.5 else 3
 
 
-def build_clouds(width, load, tick):
+def build_clouds(width, load, tick, shapes=CLOUD_SHAPES):
     """Clouds drifting left to right across the sky as (row, col, text, color), wrapping around.
 
     They all move at the same speed from evenly spaced starts, so they never run into each other.
     """
     count = cloud_count(load)
-    period = width + max(len(shape[-1]) for shape in CLOUD_SHAPES)
+    period = width + max(len(shape[-1]) for shape in shapes)
     cells = []
     for i in range(count):
-        shape = CLOUD_SHAPES[i % len(CLOUD_SHAPES)]
+        shape = shapes[i % len(shapes)]
         cloud_width = len(shape[-1])
         start = period // 4 + i * period // count
         cloud_left = (start + tick // CLOUD_TICKS_PER_COLUMN) % period - cloud_width
@@ -681,10 +737,49 @@ def planet_spot(width, day_of_year):
     return row, col
 
 
-def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0):
+def build_bats(width, tick):
+    """Two bats flitting across the Halloween night sky as (row, col, text), flapping and bobbing.
+
+    They fly at the same speed half a lap apart, so they never run into each other.
+    """
+    bat_width = len(BAT_FRAMES[0])
+    period = width + bat_width
+    cells = []
+    for i in range(2):
+        col = (tick // BAT_TICKS_PER_COLUMN + i * period // 2) % period - bat_width
+        row = BAT_ROWS[(tick // 4 + 2 * i) % len(BAT_ROWS)]
+        text = BAT_FRAMES[(tick // 2 + i) % len(BAT_FRAMES)]
+        if col < 0:
+            text, col = text[-col:], 0  # flying in from the left edge
+        text = text[:max(0, width - 1 - col)]  # flying off the right edge
+        if text:
+            cells.append((row, col, text))
+    return cells
+
+
+def build_fireworks(width, tick, seed):
+    """A New Year's firework as (row, col, text, color) cells: a rocket, a burst, fading sparks.
+
+    Like shooting stars, each FIREWORK_WINDOW has a FIREWORK_CHANCE of one, decided from the seed.
+    """
+    window, tick_in_window = divmod(tick, FIREWORK_WINDOW)
+    rng = random.Random(f'fireworks:{seed}:{window}')
+    if rng.random() >= FIREWORK_CHANCE:
+        return []
+    start = rng.randrange(FIREWORK_WINDOW - len(FIREWORK_FRAMES))
+    step = tick_in_window - start
+    if not 0 <= step < len(FIREWORK_FRAMES):
+        return []
+    center = rng.randrange(1, width - 2)  # room for the burst's arms on both sides
+    color = rng.choice(FIREWORK_COLORS)
+    return [(row, center + offset, text, color) for row, offset, text in FIREWORK_FRAMES[step]]
+
+
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
     the moon in its real phase, a ringed planet, stars and the odd shooting star by night, and a red
-    sun, glowing clouds and the first (or last) stars at dusk and dawn.
+    sun, glowing clouds and the first (or last) stars at dusk and dawn. Holidays add bats (Halloween),
+    fireworks (New Year) and clouds made of digits (Pi Day).
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -703,7 +798,8 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
         taken.update((row, col + offset) for offset in range(len(text)))
 
     if daytime:
-        for row, col, text, _ in build_clouds(width, load, tick):
+        shapes = PI_DAY_CLOUDS if holiday == 'pi_day' else CLOUD_SHAPES
+        for row, col, text, _ in build_clouds(width, load, tick, shapes):
             place(row, col, text, 'sunset' if twilight else 'cloud')  # clouds glow at sunrise and sunset
         if not any((body_row, body_col + offset) in taken for offset in range(len(body))):  # else behind a cloud
             place(body_row, body_col, body, 'sunset' if twilight else 'sun')
@@ -719,6 +815,15 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
             row, col, text = streak
             if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon or planet
                 place(row, col, text, 'shooting_star')
+        if holiday == 'halloween':
+            for row, col, text in build_bats(width, tick):
+                if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon
+                    place(row, col, text, 'dim')
+        if holiday == 'new_year':
+            burst = build_fireworks(width, tick, seed)
+            if not any((row, col + offset) in taken for row, col, text, _ in burst for offset in range(len(text))):
+                for row, col, text, color in burst:
+                    place(row, col, text, color)
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
 
@@ -767,9 +872,28 @@ def build_plant(uptime_sec):
     return [] if stage is None else PLANT_STAGES[stage][1]
 
 
-def build_ground(width):
-    """A line of grass across the window."""
-    return (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
+def build_ground(width, holiday=None, tick=0):
+    """The ground across the window as (col, text, color) pieces: a line of grass, strung with
+    twinkling lights at Christmas."""
+    grass = (GROUND_PATTERN * (width // len(GROUND_PATTERN) + 1))[:width - 1]
+    if holiday != 'christmas':
+        return [(0, grass, 'grass')]
+    pieces, start = [], 0
+    for col in range(LIGHT_SPACING // 2, width - 1, LIGHT_SPACING):
+        if col > start:
+            pieces.append((start, grass[start:col], 'grass'))
+        color = LIGHT_COLORS[(col // LIGHT_SPACING + tick // 4) % len(LIGHT_COLORS)]  # the colors chase each second
+        pieces.append((col, 'o', color))
+        start = col + 1
+    if start < width - 1:
+        pieces.append((start, grass[start:], 'grass'))
+    return pieces
+
+
+def build_pumpkin(tick):
+    """The Halloween jack-o'-lantern as (text, color) lines; its candle flickers."""
+    flame = 'sunset' if tick // 2 % 3 == 0 else 'pumpkin'
+    return [(PUMPKIN[0], 'leaf'), (PUMPKIN[1], flame)]
 
 
 def explain_mood(vitals, mood):
@@ -872,6 +996,8 @@ def build_help(vitals, mood, memories=None, today=None):
     lines.append(('Plant', describe_plant(vitals), 'plain'))
     alerts = build_alerts(vitals)
     lines.append(('Alerts', alerts or 'none', 'alert' if alerts else 'plain'))
+    if vitals.holiday:
+        lines.append(('Today', HOLIDAY_DESCRIPTIONS[vitals.holiday], 'plain'))
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
     lines.append(('Keys', 'p to pet  ·  ? to close this help  ·  q to quit', 'plain'))
@@ -882,7 +1008,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
-    claude, guard, pot, cloud, doctor. Nothing is placed on the bottom row or in the last column, because
+    claude, guard, pot, cloud, doctor, pumpkin. Nothing is placed on the bottom row or in the last column, because
     curses raises an error when writing the window's bottom-right corner.
     When space runs out, the pet and status line stay; the scene (sky and ground), the alert line,
     the bubble and the quit hint go first.
@@ -912,7 +1038,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
                 row += 1
         return cells
 
-    pet = build_pet(mood, tick)
+    pet = build_pet(mood, tick, vitals.holiday)
     bounced = pet[0][0] == ''
     if bounced:
         pet = pet[1:]  # lay out the resting pet, then move it a row, so the bounce moves the pet and not the bubble
@@ -934,7 +1060,8 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
-        sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year)
+        sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year,
+                        vitals.holiday)
         for row, col, text, color in sky:
             add(row, col, text, color)
     else:
@@ -975,6 +1102,13 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         for i, (text, color) in enumerate(plant):
             add(feet_row - len(plant) + 1 + i, plant_left, text, color)
 
+    # At Halloween a jack-o'-lantern sits just past the plant, when there's room
+    pumpkin_left = left + PUMPKIN_OFFSET
+    if vitals.holiday == 'halloween' and pumpkin_left + len(PUMPKIN[0]) <= width - 1:
+        pumpkin = build_pumpkin(tick)
+        for i, (text, color) in enumerate(pumpkin):
+            add(feet_row - len(pumpkin) + 1 + i, pumpkin_left, text, color)
+
     extras_color = 'berry' if mood == 'happy' else 'extra'  # red hearts
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
@@ -984,7 +1118,8 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         status = build_short_status(vitals)
     status_row = pet_top + pet_height + 1
     if show_scene:
-        add(pet_top + pet_height, 0, build_ground(width), 'grass')
+        for col, text, color in build_ground(width, vitals.holiday, tick):
+            add(pet_top + pet_height, col, text, color)
         status_row += 1
     add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
     last_row = status_row
@@ -1032,12 +1167,22 @@ def render_lines(cells, height, width, use_color=False):
     return lines
 
 
+def holiday_sayings(vitals):
+    """Today's holiday lines, if it's a holiday."""
+    sayings = list(HOLIDAY_SAYINGS.get(vitals.holiday, []))
+    if vitals.holiday == 'birthday':
+        age = vitals.year - PI_PET_BIRTH_YEAR
+        sayings.append(f"I'm {age} today!" if age > 0 else 'I was born today!')
+    return sayings
+
+
 def pick_saying(mood, vitals, rng=random):
     """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
     friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
                       + (GUARD_SAYINGS if vitals.adguard_running and vitals.dns_answering is not False else [])
                       + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])
-                      + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else []))
+                      + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else [])
+                      + holiday_sayings(vitals))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
         return rng.choice(friend_sayings)
     return rng.choice(SAYINGS[mood])
@@ -1262,6 +1407,7 @@ def curses_colors():
         'sunset': curses.color_pair(2) | curses.A_BOLD,  # 8-color terminals have no orange
         'shooting_star': curses.color_pair(4) | curses.A_BOLD,
         'planet': curses.color_pair(6),
+        'pumpkin': curses.color_pair(4) | curses.A_BOLD,
     }
 
 

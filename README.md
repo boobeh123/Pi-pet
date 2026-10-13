@@ -82,13 +82,25 @@ In a smaller terminal window it drops the scene first, then the speech bubble, a
 
 Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps one CPU core at 100% (Ctrl+C to stop); run it two or three times to push the load past 2.
 
+## Holidays
+
+The Pi's calendar brings a few decorations, and on the day the pet's calm moods sometimes say something to fit:
+
+| Holiday | When | What you'll see |
+|---|---|---|
+| Halloween | Oct 25-31 | A jack-o'-lantern `(^w^)` with a flickering candle beside the plant, and two bats `^v^` flapping across the night sky |
+| Christmas | Dec 20-26 | Lights strung along the grass, the colors chasing each other |
+| New Year | Dec 31 and Jan 1 | Fireworks at night: a rocket goes up, bursts into `\|/ -*- /|\`, and fades to sparks |
+| Pi Day | Mar 14 | Clouds that read `(3.14159)` |
+| Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
+
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-156 standard-library tests, no sensors needed. They check:
+168 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -111,6 +123,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
+- holidays: every date range, the new art being one column wide, the party hat and its age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
@@ -128,6 +141,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Memory | `MemAvailable` ÷ `MemTotal` in `/proc/meminfo` |
 | Uptime (groggy, the plant) | `/proc/uptime` |
 | Memories | `~/.local/state/pi-pet/memories.json` (live view only; written by Pi Pet itself) |
+| Holidays | the Pi's local date |
 | Time of day | the Pi's local clock (`time.localtime()`) |
 | Clouds | the 1-minute load, same as busy |
 | Planet | the day of the year (decorative) |
