@@ -22,7 +22,7 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0, day_of_year=200):
+                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -43,6 +43,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.moon_age = moon_age
     vitals.sky_seed = sky_seed
     vitals.day_of_year = day_of_year
+    vitals.dns_answering = dns_answering
     return vitals
 
 
@@ -273,7 +274,8 @@ class SceneTest(unittest.TestCase):
                                              make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
                                                          pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
                                                          day_of_year=tick * 15,
-                                                         adguard_running=tick % 2 == 0))  # guard awake or asleep
+                                                         adguard_running=tick % 2 == 0,  # guard awake or asleep
+                                                         dns_answering=tick % 4 != 0))  # and sometimes alarmed
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -801,6 +803,54 @@ class DoctorTest(unittest.TestCase):
         away = {piPet.pick_saying('content', make_vitals(), rng) for _ in range(200)}
         self.assertTrue(visiting & set(piPet.DOCTOR_SAYINGS))
         self.assertFalse(away & set(piPet.DOCTOR_SAYINGS))
+
+
+SAMPLE_UDP6 = """\
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops
+ 2104: 00000000000000000000000000000000:0035 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0
+ 2105: 0000000000000000FFFF00003C44A8C0:D2F1 0000000000000000FFFF00000144A8C0:0035 01 00000000:00000000 00:00000000 00000000  1000        0 2 2 0
+"""
+
+
+class DnsGuardTest(unittest.TestCase):
+    def test_finds_a_bound_dns_socket_without_sending_anything(self):
+        with fake_file(SAMPLE_UDP6):
+            self.assertTrue(piPet.is_udp_port_bound(53))
+        connected_only = '\n'.join(line for line in SAMPLE_UDP6.splitlines() if ' 2104:' not in line)
+        with fake_file(connected_only):
+            self.assertFalse(piPet.is_udp_port_bound(53), 'a query sent to port 53 is not a server on port 53')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertFalse(piPet.is_udp_port_bound(53))
+
+    def test_alarmed_frames_line_up(self):
+        for frame in piPet.GUARD_ALARMED:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char))
+
+    def guard_faces(self, **readings):
+        faces = set()
+        for tick in TICKS:
+            cells = piPet.layout(24, 80, 'content', tick, 'hi', make_vitals(**readings))
+            faces |= {(text, color) for _, _, text, color in cells if text.startswith('(') and text.endswith(')') and len(text) == 5}
+        return faces
+
+    def test_guard_raises_the_alarm_when_dns_stops_being_served(self):
+        faces = self.guard_faces(adguard_running=True, dns_answering=False)
+        self.assertEqual(faces, {('(O_O)', 'alert')})
+        self.assertEqual(piPet.build_alerts(make_vitals(adguard_running=True, dns_answering=False)), 'DNS port 53 closed')
+
+    def test_no_dns_alarm_unless_adguard_runs_and_the_port_is_closed(self):
+        for readings in (dict(adguard_running=True, dns_answering=True), dict(adguard_running=True, dns_answering=None),
+                         dict(adguard_running=None), dict(adguard_running=False, dns_answering=False)):
+            with self.subTest(readings=readings):
+                self.assertNotIn('DNS', piPet.build_alerts(make_vitals(**readings)))
+                self.assertNotIn(('(O_O)', 'alert'), self.guard_faces(**readings))
+
+    def test_no_bragging_about_the_guard_while_dns_is_down(self):
+        rng = random.Random(5)
+        said = {piPet.pick_saying('content', make_vitals(adguard_running=True, dns_answering=False), rng) for _ in range(200)}
+        self.assertFalse(said & set(piPet.GUARD_SAYINGS))
 
 
 class AlertTest(unittest.TestCase):

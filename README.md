@@ -29,7 +29,7 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 
 Groggy comes before lonely and busy on purpose: right after boot, Wi-Fi isn't connected yet and the load is high, and that's just the pet waking up.
 
-It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline, AdGuard stopped), a red alert line under the stats says what.
+It also says something to fit its mood, and changes the line every ~10 seconds. When something's wrong (power low, disk or memory nearly full, offline, AdGuard stopped, DNS port 53 closed), a red alert line under the stats says what.
 
 ## Running it
 
@@ -51,11 +51,11 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 
 | Pal | Visits when | Looks like |
 |---|---|---|
-| Guard | AdGuard Home is installed: on watch while it runs, asleep if it stops | A blue `(o_o)` with a helmet and a `[+]` shield, glancing left and right; `(-_-)` with a `z` when asleep |
+| Guard | AdGuard Home is installed: on watch while it runs and serves DNS, alarmed if it runs but nothing is bound to port 53, asleep if it stops | A blue `(o_o)` with a helmet and a `[+]` shield, glancing left and right; a red `(O_O)` with a flashing `!` when alarmed; `(-_-)` with a `z` when asleep |
 | Doctor | The [Pi Vitals](https://github.com/boobeh123/Pi-vitals) dashboard is listening on port 3141 | A `(o-o)` in a cross cap and lab coat with a clipboard, checking on the pet and taking notes; `(O-O)` worried when the pet is dizzy, hot, stuffed or hungry |
 | Claude | A Claude Code session is open on the Pi (VS Code or terminal) | A gold sparkle `-^‿^-` that twinkles |
 
-Pals line up by how permanent they are: the guard nearest the pet, then the doctor, then Claude, so the ones that come and go don't make the others move. A narrow window drops the farthest first. If AdGuard Home stops, the alert line says `AdGuard stopped`. On a Pi without AdGuard Home there's no guard.
+Pals line up by how permanent they are: the guard nearest the pet, then the doctor, then Claude, so the ones that come and go don't make the others move. A narrow window drops the farthest first. If AdGuard Home stops, the alert line says `AdGuard stopped`; if it keeps running but stops serving DNS (nothing bound to UDP port 53), it says `DNS port 53 closed`. On a Pi without AdGuard Home there's no guard.
 
 ## The plant
 
@@ -84,7 +84,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-119 standard-library tests, no sensors needed. They check:
+124 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -95,6 +95,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the scene: only in big windows, never overlapping anything at any hour, sun by day and moon and stars by night, the sun's path, stars that twinkle without moving, and grass right under the feet
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
+- the DNS check: finding a bound port-53 socket (and not mistaking an outgoing query for a server), the alarmed guard and its alert, and no alarm unless AdGuard runs with the port closed
 - the doctor: finding a listening port, visiting only while Pi Vitals runs, checking and taking notes, worrying about urgent moods, and the pals' lineup order
 - the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
 - the moon: the formula against the 2024-04-08 eclipse (new moon) and the 2024-04-23 full moon, its shape through the month, and new moon nights having no moon and more stars
@@ -124,6 +125,6 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Moon phase | days since a known new moon (2000-01-06 18:14 UTC) modulo the 29.53-day lunar month; good to about a day |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
 | Pi Vitals doctor | a socket listening on port 3141 in `/proc/net/tcp` or `tcp6` (read only, never connects) |
-| AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs |
+| AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs and a UDP socket is bound to port 53 in `/proc/net/udp` or `udp6` (read only, never sends a query) |
 | Online | a default route in `/proc/net/route` |
 | Network traffic | `/proc/net/dev` (bytes in + out, compared between polls) on the interface the default route uses in `/proc/net/route` (lowest metric wins, falls back to `wlan0`). `--iface` picks one instead. |

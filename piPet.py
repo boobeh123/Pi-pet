@@ -114,7 +114,9 @@ CLAUDE_PAL = [
     [' .|. ', '-^‿^-', " '|' "],  # twinkle
 ]
 
-# The AdGuard Home guard: on watch while the service runs, asleep if it stops
+# The AdGuard Home guard: on watch while the service runs and DNS is being served, alarmed if it runs
+# but nothing is bound to the DNS port, asleep if it stops
+DNS_PORT = 53
 GUARD_ON_WATCH = [
     [' _^_ ', '(o_o)', '/[+]\\'],
     [' _^_ ', '(<_<)', '/[+]\\'],  # glances left
@@ -124,6 +126,10 @@ GUARD_ON_WATCH = [
 GUARD_ASLEEP = [
     [' _^_z', '(-_-)', '/[+]\\'],
     [' _^_Z', '(-_-)', '/[+]\\'],
+]
+GUARD_ALARMED = [
+    [' _^_!', '(O_O)', '/[+]\\'],
+    [' _^_ ', '(O_O)', '/[+]\\'],  # the ! flashes
 ]
 # The plant grows with uptime, so a reboot repots it. Stages: (days of uptime to reach it, lines from the top)
 POT = ('\\___/', 'pot')
@@ -289,6 +295,27 @@ def is_port_listening(port):
     return False
 
 
+def is_udp_port_bound(port):
+    """True if a UDP socket on this machine is bound to a port and waiting for anyone, the way a DNS server
+    waits for queries (from /proc/net/udp and udp6). Like is_port_listening, it never sends anything."""
+    port_hex = f':{port:04X}'
+    for path in ('/proc/net/udp', '/proc/net/udp6'):
+        try:
+            with open(path) as f:
+                next(f, None)  # header line
+                for line in f:
+                    fields = line.split()
+                    if len(fields) < 4 or not fields[1].endswith(port_hex):
+                        continue
+                    remote_address = fields[2].split(':')[0]
+                    # 07 is an unconnected socket; a server's has no remote address (all zeros)
+                    if fields[3] == '07' and set(remote_address) == {'0'}:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def is_adguard_installed():
     return any(os.path.exists(path) for path in ADGUARD_INSTALL_PATHS)
 
@@ -320,6 +347,8 @@ class Vitals:
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
         self.adguard_running = 'AdGuardHome' in processes if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
+        # Only asked while AdGuard runs: is it actually serving DNS? None means "not asked"
+        self.dns_answering = is_udp_port_bound(DNS_PORT) if self.adguard_running else None
         now = time.localtime()
         self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
         self.moon_age = moon_age_days(time.time())
@@ -473,6 +502,8 @@ def build_alerts(vitals):
         alerts.append('offline')
     if vitals.adguard_running is False:
         alerts.append('AdGuard stopped')
+    elif vitals.adguard_running and vitals.dns_answering is False:
+        alerts.append('DNS port 53 closed')
     return '  ·  '.join(alerts)
 
 
@@ -676,7 +707,9 @@ def build_pals(vitals, tick, mood):
     don't make the others move, and a narrow window drops the most fleeting first.
     """
     pals = []
-    if vitals.adguard_running:
+    if vitals.adguard_running and vitals.dns_answering is False:
+        pals.append((GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
+    elif vitals.adguard_running:
         pals.append((GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)], 'guard'))  # a glance every second
     elif vitals.adguard_running is False:
         pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
@@ -852,7 +885,7 @@ def render_lines(cells, height, width, use_color=False):
 def pick_saying(mood, vitals, rng=random):
     """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
     friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
-                      + (GUARD_SAYINGS if vitals.adguard_running else [])
+                      + (GUARD_SAYINGS if vitals.adguard_running and vitals.dns_answering is not False else [])
                       + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])
                       + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else []))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
