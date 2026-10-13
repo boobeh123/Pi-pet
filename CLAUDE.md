@@ -35,7 +35,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - Network speed comes from `update_net_rate()`. It skips readings closer than `MIN_RATE_SECONDS`, and it resets the measurement when the default-route interface changes.
   - `mood()` is an ordered priority chain: dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content. `happy` exists only for petting and `--mood`; the sensors never pick it.
 - **Builders** (`build_pet`, `build_extras`, `build_pals`, `build_plant`, `build_sky`, `build_bubble`, `build_status`, `build_alerts`) return text, or cells *relative to the pet's top-left corner*. They never know the window size, except `build_sky` and `build_ground`, which span the full width.
-- **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `run_live`'s curses `colors` dict and `ANSI_COLORS`; a test checks the ANSI side.
+- **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `curses_colors()` and `ANSI_COLORS`; a test checks the ANSI side.
   - **When space runs out, things drop in this order:** scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
@@ -45,11 +45,10 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
     - Nothing goes in the bubble's rows. That was a real bug once.
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
   - Nothing is drawn on the bottom row or in the last column. curses raises an error when writing the bottom-right corner.
-- **`run_live`** owns the timing (`FPS` = 4 ticks/s):
-  - sensor refresh every 2 s;
-  - a new saying every ~10 s or on a mood change, never at tick 0, so the opening line survives;
-  - the petting timer (`petted_until`);
-  - Claude's arrival greeting.
+- **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
+  - `press(key, now)` handles keys and returns False to quit;
+  - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
+  - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
 - **`pick_saying()`**: calm moods (`CHATTY_MOODS`) sometimes use a friend line (`CLAUDE_SAYINGS`, `GUARD_SAYINGS`, `PLANT_SAYINGS`) instead of their own `SAYINGS`.
 

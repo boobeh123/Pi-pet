@@ -937,9 +937,57 @@ def print_once(forced_mood=None, interface=None):
     print(f'mood: {mood}')
 
 
-def run_live(screen, forced_mood=None, interface=None):
-    curses.curs_set(0)
-    screen.nodelay(True)
+class LiveState:
+    """What the live view keeps between frames: the mood, what the pet is saying, petting and greetings.
+
+    The timing rules live here instead of in the curses loop, so tests can drive them with a fake clock
+    (`now`, in seconds) and scripted readings.
+    """
+
+    QUIT_KEYS = (ord('q'), ord('Q'), 27)  # 27 is Esc
+    PET_KEYS = (ord('p'), ord('P'))
+
+    def __init__(self, vitals, rng=random):
+        self.vitals = vitals
+        self.rng = rng
+        self.mood = vitals.mood()
+        self.saying = CLAUDE_GREETING if vitals.claude_here else pick_saying(self.mood, vitals, rng)
+        self.petted_until = 0
+        self.was_petted = False
+        self.claude_was_here = vitals.claude_here
+
+    def press(self, key, now):
+        """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
+        if key in self.QUIT_KEYS:
+            return False
+        if key in self.PET_KEYS:
+            if not self.was_petted:
+                self.saying = self.rng.choice(SAYINGS['happy'])
+            self.petted_until = now + PET_SECONDS  # petting again keeps it happy longer
+        return True
+
+    def step(self, tick, now):
+        """Move on one frame: sensors every 2 seconds, and a new thing to say every ~10 seconds or when
+        the mood changes. Returns the mood to show."""
+        petted = now < self.petted_until
+        if tick % (FPS * 2) == 0:
+            self.vitals.refresh()
+            new_mood = self.vitals.mood()
+            time_for_new_saying = tick > 0 and tick % (FPS * 10) == 0  # not at tick 0: keep the opening line
+            if not petted and (new_mood != self.mood or time_for_new_saying):
+                self.saying = pick_saying(new_mood, self.vitals, self.rng)
+            if self.vitals.claude_here and not self.claude_was_here and not petted:
+                self.saying = CLAUDE_GREETING
+            self.claude_was_here = self.vitals.claude_here
+            self.mood = new_mood
+        if self.was_petted and not petted:
+            self.saying = pick_saying(self.mood, self.vitals, self.rng)  # back to its real mood
+        self.was_petted = petted
+        return 'happy' if petted else self.mood
+
+
+def curses_colors():
+    """The curses attribute for each layout color. Matches ANSI_COLORS for --once."""
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_GREEN, -1)
     curses.init_pair(2, curses.COLOR_RED, -1)
@@ -947,7 +995,7 @@ def run_live(screen, forced_mood=None, interface=None):
     curses.init_pair(4, curses.COLOR_YELLOW, -1)
     curses.init_pair(5, curses.COLOR_BLUE, -1)
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)
-    colors = {
+    return {
         'leaf': curses.color_pair(1) | curses.A_BOLD,
         'berry': curses.color_pair(2) | curses.A_BOLD,
         'extra': curses.color_pair(3),
@@ -967,43 +1015,23 @@ def run_live(screen, forced_mood=None, interface=None):
         'planet': curses.color_pair(6),
     }
 
-    vitals = Vitals(forced_mood, interface)
+
+def run_live(screen, forced_mood=None, interface=None):
+    curses.curs_set(0)
+    screen.nodelay(True)
+    colors = curses_colors()
+    state = LiveState(Vitals(forced_mood, interface))
     tick = 0
-    mood = vitals.mood()
-    saying = CLAUDE_GREETING if vitals.claude_here else pick_saying(mood, vitals)
-    petted_until = 0
-    was_petted = False
-    claude_was_here = vitals.claude_here
 
     while True:
-        key = screen.getch()
-        if key in (ord('q'), ord('Q'), 27):
+        now = time.monotonic()
+        if not state.press(screen.getch(), now):
             return
-        if key in (ord('p'), ord('P')):
-            if not was_petted:
-                saying = random.choice(SAYINGS['happy'])
-            petted_until = time.monotonic() + PET_SECONDS  # petting again keeps it happy longer
-        petted = time.monotonic() < petted_until
-
-        # Sensors every 2 seconds; a new thing to say every ~10 seconds or on a mood change
-        if tick % (FPS * 2) == 0:
-            vitals.refresh()
-            new_mood = vitals.mood()
-            time_for_new_saying = tick > 0 and tick % (FPS * 10) == 0  # not at tick 0: keep the opening line
-            if not petted and (new_mood != mood or time_for_new_saying):
-                saying = pick_saying(new_mood, vitals)
-            if vitals.claude_here and not claude_was_here and not petted:
-                saying = CLAUDE_GREETING
-            claude_was_here = vitals.claude_here
-            mood = new_mood
-        if was_petted and not petted:
-            saying = pick_saying(mood, vitals)  # back to its real mood
-        was_petted = petted
+        shown_mood = state.step(tick, now)
 
         screen.erase()
         height, width = screen.getmaxyx()
-        shown_mood = 'happy' if petted else mood
-        for row, col, text, color in layout(height, width, shown_mood, tick, saying, vitals):
+        for row, col, text, color in layout(height, width, shown_mood, tick, state.saying, state.vitals):
             screen.addstr(row, col, text, colors[color])
         screen.refresh()
         tick += 1

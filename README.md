@@ -84,7 +84,7 @@ Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps o
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-124 standard-library tests, no sensors needed. They check:
+131 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -103,6 +103,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the planet: one at night and none by day, staying put all night, drifting and wrapping day by day, and hiding behind the moon
 - shooting stars: about one every three minutes, crossing and falling over 1.5 seconds, a different schedule each run, night only, and never overlapping the moon or stars
 - the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
+- the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts

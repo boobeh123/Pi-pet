@@ -853,6 +853,87 @@ class DnsGuardTest(unittest.TestCase):
         self.assertFalse(said & set(piPet.GUARD_SAYINGS))
 
 
+class LiveStateTest(unittest.TestCase):
+    """The live view's timing rules, driven with a fake clock and scripted readings."""
+
+    def make_state(self, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None  # readings change only when a test changes them
+        return piPet.LiveState(vitals, rng=random.Random(0))
+
+    def counting_sayings(self):
+        """Patch pick_saying so every new pick is visibly different: 'saying 1', 'saying 2', ..."""
+        count = iter(range(1, 1000))
+        return mock.patch.object(piPet, 'pick_saying', side_effect=lambda *args: f'saying {next(count)}')
+
+    def test_opening_line(self):
+        self.assertEqual(self.make_state(claude_here=True).saying, piPet.CLAUDE_GREETING)
+        self.assertIn(self.make_state().saying, piPet.SAYINGS['content'])
+
+    def test_quit_keys(self):
+        state = self.make_state()
+        for key in (ord('q'), ord('Q'), 27):
+            self.assertFalse(state.press(key, now=0))
+        for key in (-1, ord('x'), ord('p')):
+            self.assertTrue(state.press(key, now=0))
+
+    def test_new_saying_every_ten_seconds_but_not_at_the_start(self):
+        with self.counting_sayings():
+            state = self.make_state()
+            opening = state.saying
+            for tick in range(piPet.FPS * 10):
+                state.step(tick, now=tick / piPet.FPS)
+                self.assertEqual(state.saying, opening, f'tick {tick}')
+            state.step(piPet.FPS * 10, now=10.0)
+            self.assertNotEqual(state.saying, opening)
+
+    def test_mood_change_brings_a_new_saying(self):
+        with self.counting_sayings():
+            state = self.make_state()
+            state.step(0, now=0)
+            state.vitals.load = 3.0  # busy now
+            state.step(1, now=0.25)
+            self.assertEqual(state.mood, 'content', 'sensors are only read every 2 seconds')
+            before = state.saying
+            state.step(piPet.FPS * 2, now=2.0)
+            self.assertEqual(state.mood, 'busy')
+            self.assertNotEqual(state.saying, before)
+
+    def test_petting(self):
+        state = self.make_state()
+        state.step(0, now=99.0)
+        state.press(ord('p'), now=100.0)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+        self.assertEqual(state.step(1, now=100.0), 'happy')
+        self.assertEqual(state.step(2, now=100.0 + piPet.PET_SECONDS - 0.01), 'happy')
+        self.assertEqual(state.step(3, now=100.0 + piPet.PET_SECONDS), 'content')
+        self.assertIn(state.saying, piPet.SAYINGS['content'], 'back to its real mood')
+
+    def test_petting_again_keeps_it_happy_longer_without_changing_the_line(self):
+        state = self.make_state()
+        state.press(ord('p'), now=100.0)
+        state.step(1, now=100.0)
+        line = state.saying
+        state.press(ord('p'), now=102.0)
+        self.assertEqual(state.saying, line)
+        self.assertEqual(state.step(2, now=104.0), 'happy')
+        self.assertEqual(state.step(3, now=102.0 + piPet.PET_SECONDS), 'content')
+
+    def test_claude_arriving_gets_a_greeting_unless_the_pet_is_busy_being_petted(self):
+        state = self.make_state()
+        state.step(0, now=0)
+        state.vitals.claude_here = True
+        state.step(piPet.FPS * 2, now=2.0)
+        self.assertEqual(state.saying, piPet.CLAUDE_GREETING)
+
+        petted = self.make_state()
+        petted.step(0, now=0)
+        petted.press(ord('p'), now=1.0)
+        petted.vitals.claude_here = True
+        petted.step(piPet.FPS * 2, now=2.0)
+        self.assertIn(petted.saying, piPet.SAYINGS['happy'])
+
+
 class AlertTest(unittest.TestCase):
     def test_healthy_pi_has_no_alerts(self):
         self.assertEqual(piPet.build_alerts(make_vitals()), '')
