@@ -1372,6 +1372,37 @@ class HelpTest(unittest.TestCase):
         self.assertIn('p pet · ? help · q quit', [text for *_, text, _ in cells])
 
 
+class CheerTest(unittest.TestCase):
+    def pal_faces(self, mood, tick=1, **readings):
+        cells = piPet.layout(24, 80, mood, tick, 'hi', make_vitals(**readings))
+        return {color: text for *_, text, color in cells
+                if color in ('guard', 'doctor', 'alert', 'dim') and text.startswith('(') and len(text) == 5}
+
+    def test_cheering_art_lines_up(self):
+        for frame in (piPet.GUARD_CHEERING, piPet.DOCTOR_CHEERING):
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char))
+
+    def test_pals_cheer_while_the_pet_is_petted(self):
+        everyone = dict(adguard_running=True, pi_vitals_running=True)
+        self.assertEqual(self.pal_faces('happy', **everyone), {'guard': '(^_^)', 'doctor': '(^-^)'})
+        self.assertNotIn('(^_^)', self.pal_faces('content', **everyone).values())
+        self.assertNotIn('(^-^)', self.pal_faces('content', **everyone).values())
+
+    def test_a_dns_problem_or_a_nap_is_not_interrupted(self):
+        self.assertEqual(self.pal_faces('happy', adguard_running=True, dns_answering=False), {'alert': '(O_O)'})
+        self.assertEqual(self.pal_faces('happy', adguard_running=False), {'dim': '(-_-)'})
+
+    def test_claude_twinkles_faster_when_cheering(self):
+        def twinkles(mood):
+            frames = [tuple(text for *_, text, color in piPet.layout(24, 80, mood, tick, 'hi', make_vitals(claude_here=True))
+                            if color == 'claude') for tick in range(4)]
+            return len({frames[0], frames[2]})
+        self.assertEqual(twinkles('happy'), 2)
+        self.assertEqual(twinkles('content'), 1)
+
+
 class AlertTest(unittest.TestCase):
     def test_healthy_pi_has_no_alerts(self):
         self.assertEqual(piPet.build_alerts(make_vitals()), '')

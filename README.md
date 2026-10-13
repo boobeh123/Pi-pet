@@ -61,6 +61,8 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 | Doctor | The [Pi Vitals](https://github.com/boobeh123/Pi-vitals) dashboard is listening on port 3141 | A `(o-o)` in a cross cap and lab coat with a clipboard, checking on the pet and taking notes; `(O-O)` worried when the pet is dizzy, hot, stuffed or hungry |
 | Claude | A Claude Code session is open on the Pi (VS Code or terminal) | A gold sparkle `-^‿^-` that twinkles |
 
+When you pet the pet, the guard and the doctor cheer with their arms up, `(^_^)` and `(^-^)`, and Claude's sparkle twinkles twice as fast. An alarmed or sleeping guard stays that way: a DNS problem doesn't stop for a celebration.
+
 Pals line up by how permanent they are: the guard nearest the pet, then the doctor, then Claude, so the ones that come and go don't make the others move. A narrow window drops the farthest first. If AdGuard Home stops, the alert line says `AdGuard stopped`; if it keeps running but stops serving DNS (nothing bound to UDP port 53), it says `DNS port 53 closed`. On a Pi without AdGuard Home there's no guard.
 
 ## The plant
@@ -102,7 +104,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-175 standard-library tests, no sensors needed. They check:
+179 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -125,6 +127,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
+- cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
 - watering: `w` pours for 3 seconds and counts once per watering, the can's spout over the middle of every plant stage with drops falling between, no can without a plant or room, and the key hint in three widths
 - holidays: every date range, the new art being one column wide, the party hat and its age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal

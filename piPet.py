@@ -179,6 +179,7 @@ GUARD_ASLEEP = [
     [' _^_z', '(-_-)', '/[+]\\'],
     [' _^_Z', '(-_-)', '/[+]\\'],
 ]
+GUARD_CHEERING = [' _^_ ', '(^_^)', '\\[+]/']  # arms and shield up, while the pet is being petted
 GUARD_ALARMED = [
     [' _^_!', '(O_O)', '/[+]\\'],
     [' _^_ ', '(O_O)', '/[+]\\'],  # the ! flashes
@@ -201,6 +202,7 @@ DOCTOR_CHECKING = [
     [' _+_ ', '(.-.)', '/|=|\\'],  # writing notes
 ]
 DOCTOR_WORRIED = [' _+_ ', '(O-O)', '/|=|\\']
+DOCTOR_CHEERING = [' _+_ ', '(^-^)', '\\|=|/']  # arms up, while the pet is being petted
 URGENT_MOODS = ('dizzy', 'hot', 'stuffed', 'hungry')
 
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
@@ -843,22 +845,28 @@ def build_pals(vitals, tick, mood):
     """The pals visiting right now, nearest the pet first, as (lines, color) for this frame.
 
     They line up by how permanent they are (guard, doctor, then Claude), so the ones that come and go
-    don't make the others move, and a narrow window drops the most fleeting first.
+    don't make the others move, and a narrow window drops the most fleeting first. While the pet is
+    happy (being petted) they cheer, unless the guard is busy with a DNS problem or asleep.
     """
+    cheering = mood == 'happy'
     pals = []
     if vitals.adguard_running and vitals.dns_answering is False:
         pals.append((GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
     elif vitals.adguard_running:
-        pals.append((GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)], 'guard'))  # a glance every second
+        frame = GUARD_CHEERING if cheering else GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)]  # a glance every second
+        pals.append((frame, 'guard'))
     elif vitals.adguard_running is False:
         pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
     if vitals.pi_vitals_running:
-        if mood in URGENT_MOODS:
+        if cheering:
+            pals.append((DOCTOR_CHEERING, 'doctor'))
+        elif mood in URGENT_MOODS:
             pals.append((DOCTOR_WORRIED, 'doctor'))
         else:
             pals.append((DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
     if vitals.claude_here:
-        pals.append((CLAUDE_PAL[tick // 4 % 2], 'claude'))  # twinkles about once a second
+        twinkle_ticks = 2 if cheering else 4  # twinkles about once a second, twice as fast when cheering
+        pals.append((CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
     return pals
 
 
