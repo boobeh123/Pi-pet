@@ -670,6 +670,15 @@ class ShootingStarTest(unittest.TestCase):
         self.assertGreater(drawn, 100)
 
 
+class ClipTest(unittest.TestCase):
+    def test_clip_to_width(self):
+        cases = [((5, 'abc'), (5, 'abc')), ((-1, 'abc'), (0, 'bc')), ((-3, 'abc'), (0, '')), ((-9, 'abc'), (0, '')),
+                 ((8, 'abc'), (8, 'a')), ((9, 'abc'), (9, '')), ((7, 'abc'), (7, 'ab'))]
+        for (col, text), expected in cases:
+            with self.subTest(col=col, text=text):
+                self.assertEqual(piPet.clip_to_width(col, text, width=10), expected)
+
+
 class CloudTest(unittest.TestCase):
     def clouds(self, cells):
         return [cell for cell in cells if cell[3] == 'cloud']
@@ -1318,6 +1327,8 @@ class HelpTest(unittest.TestCase):
             with self.subTest(mood=mood):
                 self.assertIn(expected, piPet.explain_mood(make_vitals(**readings), mood))
         self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='hot'), 'hot'), 'forced with --mood')
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='happy'), 'happy'), 'forced with --mood')
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='hot'), 'happy'), 'you just petted me')
 
     def test_sky_is_described_for_the_time_of_day(self):
         cases = [(10.0, 'day: the sun'), (6.5, 'dawn'), (17.5, 'dusk'), (22.0, 'night: full moon')]

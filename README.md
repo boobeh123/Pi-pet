@@ -104,7 +104,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-179 standard-library tests, no sensors needed. They check:
+180 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows

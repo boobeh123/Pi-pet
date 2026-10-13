@@ -663,6 +663,15 @@ def cloud_count(load):
     return 2 if load < 1.5 else 3
 
 
+def clip_to_width(col, text, width):
+    """The part of text that's inside a window `width` columns wide (never using the last column),
+    as (col, text). For things drifting in from the left edge or off the right one; text is '' when
+    none of it is inside."""
+    if col < 0:
+        text, col = text[-col:], 0
+    return col, text[:max(0, width - 1 - col)]
+
+
 def build_clouds(width, load, tick, shapes=CLOUD_SHAPES):
     """Clouds drifting left to right across the sky as (row, col, text, color), wrapping around.
 
@@ -677,9 +686,7 @@ def build_clouds(width, load, tick, shapes=CLOUD_SHAPES):
         start = period // 4 + i * period // count
         cloud_left = (start + tick // CLOUD_TICKS_PER_COLUMN) % period - cloud_width
         for line_no, text in enumerate(shape):
-            col = cloud_left + (cloud_width - len(text)) // 2
-            if col < 0:
-                text, col = text[-col:], 0  # drifting in from the left edge
+            col, text = clip_to_width(cloud_left + (cloud_width - len(text)) // 2, text, width)
             if text:
                 cells.append((i % 2 + line_no, col, text, 'cloud'))
     return cells
@@ -754,10 +761,7 @@ def build_bats(width, tick):
     for i in range(2):
         col = (tick // BAT_TICKS_PER_COLUMN + i * period // 2) % period - bat_width
         row = BAT_ROWS[(tick // 4 + 2 * i) % len(BAT_ROWS)]
-        text = BAT_FRAMES[(tick // 2 + i) % len(BAT_FRAMES)]
-        if col < 0:
-            text, col = text[-col:], 0  # flying in from the left edge
-        text = text[:max(0, width - 1 - col)]  # flying off the right edge
+        col, text = clip_to_width(col, BAT_FRAMES[(tick // 2 + i) % len(BAT_FRAMES)], width)
         if text:
             cells.append((row, col, text))
     return cells
@@ -803,39 +807,43 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
         cells.append((row, col, text, color))
         taken.update((row, col + offset) for offset in range(len(text)))
 
+    def is_free(row, col, text, margin=0):
+        """True if nothing in the sky so far is on these spots (or within `margin` columns of them)."""
+        return not any((row, near) in taken for near in range(col - margin, col + len(text) + margin))
+
     if daytime:
         shapes = PI_DAY_CLOUDS if holiday == 'pi_day' else CLOUD_SHAPES
         for row, col, text, _ in build_clouds(width, load, tick, shapes):
             place(row, col, text, 'sunset' if twilight else 'cloud')  # clouds glow at sunrise and sunset
-        if not any((body_row, body_col + offset) in taken for offset in range(len(body))):  # else behind a cloud
+        if is_free(body_row, body_col, body):  # else behind a cloud
             place(body_row, body_col, body, 'sunset' if twilight else 'sun')
         star_count = int(width // 8 * TWILIGHT_STAR_SHARE * twilight)
     else:
         if body:
             place(body_row, body_col, body, 'moon')
         row, col = planet_spot(width, day_of_year)
-        if not any((row, near) in taken for near in range(col - 1, col + len(PLANET) + 1)):  # else behind the moon
+        if is_free(row, col, PLANET, margin=1):  # else behind the moon
             place(row, col, PLANET, 'planet')
         streak = build_shooting_star(width, tick, seed)
         if streak:
             row, col, text = streak
-            if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon or planet
+            if is_free(row, col, text):  # else behind the moon or planet
                 place(row, col, text, 'shooting_star')
         if holiday == 'halloween':
             for row, col, text in build_bats(width, tick):
-                if not any((row, col + offset) in taken for offset in range(len(text))):  # else behind the moon
+                if is_free(row, col, text):  # else behind the moon
                     place(row, col, text, 'dim')
         if holiday == 'new_year':
             burst = build_fireworks(width, tick, seed)
-            if not any((row, col + offset) in taken for row, col, text, _ in burst for offset in range(len(text))):
+            if all(is_free(row, col, text) for row, col, text, _ in burst):
                 for row, col, text, color in burst:
                     place(row, col, text, color)
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
 
     for i, (row, col) in enumerate(star_spots(width, star_count)):
-        if any((row, near) in taken for near in (col - 1, col, col + 1)):
-            continue  # behind (or right beside) the sun, the moon or a cloud
+        if not is_free(row, col, '.', margin=1):
+            continue  # behind (or right beside) the sun, the moon, a cloud or the planet
         twinkle = (tick // 4 + i) % 5 == 0
         cells.append((row, col, '*' if twinkle else '.', 'plain'))
     return cells
@@ -920,7 +928,7 @@ def build_pumpkin(tick):
 
 def explain_mood(vitals, mood):
     """Why the pet is in this mood, in words, from the reading that decided it."""
-    if mood == 'happy':
+    if mood == 'happy' and vitals.forced_mood != 'happy':
         return 'you just petted me'
     if vitals.forced_mood:
         return 'forced with --mood'
