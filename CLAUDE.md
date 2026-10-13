@@ -24,6 +24,8 @@ Add `-B` to keep `__pycache__` out of the tree.
 script -q -c "stty cols 80 rows 24; TERM=xterm-256color timeout --foreground 2 python3 -B piPet.py --mood sleepy; echo EXIT=\$?" /dev/null < /dev/null
 ```
 
+**The live view writes the owner's memories file** (`~/.local/state/pi-pet/memories.json`: visits, pettings, shooting stars). For live checks, point it at a scratch folder with `XDG_STATE_HOME=<scratch dir>` inside the `script -c "..."` command, so test runs don't add fake visits. `--once` never touches it.
+
 `EXIT=124` means it ran until the timeout. Look for `Traceback` in the output. To send keys, pipe them in: `(sleep 1.5; printf p; sleep 4; printf q) | script ...`.
 
 ## Architecture
@@ -50,6 +52,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - `press(key, now)` handles keys (p pets, ? or h toggles `show_help`) and returns False to quit;
   - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
   - `notice(cells, now)` looks at each drawn frame: a shooting star appearing starts a `WISH_SECONDS` "make a wish!" (`wish_until`), which petting blocks and the saying rotation waits for.
+  - Memories: `LiveState(memories=..., wall_time=...)` opens with "missed you!" after `MISSED_YOU_SECONDS` away, and `remember(key)` counts pettings (once per petting) and shooting stars into `memories` and `unsaved`. It never touches files: `run_live` loads them with `load_memories`, and saves with `update_memories`, which re-reads the file and adds only the new counts, so two Pi Pets running at once don't overwrite each other. `save_memories` writes a temp file and `os.replace`s it.
   - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
 - **`pick_saying()`**: calm moods (`CHATTY_MOODS`) sometimes use a friend line (`CLAUDE_SAYINGS`, `GUARD_SAYINGS`, `PLANT_SAYINGS`) instead of their own `SAYINGS`.

@@ -10,7 +10,9 @@
 
 import argparse
 import curses
+import datetime
 import glob
+import json
 import math
 import os
 import random
@@ -58,6 +60,11 @@ SHOOTING_STAR_TICKS = 6          # each one crosses the sky in 1.5 seconds
 SHOOTING_STAR_SPEED = 3          # columns per tick
 WISH_SAYING = 'make a wish!'     # what the pet says when it sees a shooting star...
 WISH_SECONDS = 4                 # ...and for how long
+
+# Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
+DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'shooting_stars_seen': 0, 'last_seen': None}
+MISSED_YOU_SECONDS = 86400  # away this long or more, and the pet says...
+MISSED_YOU_SAYING = 'missed you!'
 
 # Thresholds that decide the pet's mood
 HOT_TEMP_C = 70
@@ -836,7 +843,25 @@ def describe_plant(vitals):
     return f'{grown} (a reboot repots it)'
 
 
-def build_help(vitals, mood):
+def describe_memories(memories, today):
+    """What Pi Pet remembers about the two of you, in one line."""
+    if memories['first_met']:
+        met = datetime.date.fromisoformat(memories['first_met'])
+        days = (today - met).days
+        ago = 'today' if days <= 0 else 'yesterday' if days == 1 else f'{days} days ago'
+        parts = [f'met {met:%b} {met.day}, {met.year} ({ago})']
+    else:
+        parts = ['just met']
+
+    def count(number, thing):
+        return f'{number} {thing}{"" if number == 1 else "s"}'
+    parts.append(count(memories['visits'], 'visit'))
+    parts.append(f'petted {count(memories["times_petted"], "time")}')
+    parts.append(f'{count(memories["shooting_stars_seen"], "shooting star")} seen')
+    return '  ·  '.join(parts)
+
+
+def build_help(vitals, mood, memories=None, today=None):
     """The help screen: what everything on screen means right now, as (label, text, color) lines."""
     lines = [
         ('Mood', f'{mood}: {explain_mood(vitals, mood)}', 'plain'),
@@ -847,11 +872,13 @@ def build_help(vitals, mood):
     lines.append(('Plant', describe_plant(vitals), 'plain'))
     alerts = build_alerts(vitals)
     lines.append(('Alerts', alerts or 'none', 'alert' if alerts else 'plain'))
+    if memories is not None:
+        lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
     lines.append(('Keys', 'p to pet  ·  ? to close this help  ·  q to quit', 'plain'))
     return lines
 
 
-def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False):
+def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False, memories=None):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
@@ -878,10 +905,10 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     if show_help:
         add(1, 2, "Pi Pet: what you're looking at", 'leaf')
         row = 3
-        for label, text, color in build_help(vitals, mood):
+        for label, text, color in build_help(vitals, mood, memories):
             add(row, 2, label, 'dim')
-            for line in textwrap.wrap(text, width - 11):  # long lines wrap under their own text
-                add(row, 10, line, color)
+            for line in textwrap.wrap(text, width - 13):  # long lines wrap under their own text
+                add(row, 12, line, color)
                 row += 1
         return cells
 
@@ -1060,6 +1087,66 @@ def print_once(forced_mood=None, interface=None):
     print(f'mood: {mood}')
 
 
+def memories_path():
+    """Where Pi Pet keeps its memories: $XDG_STATE_HOME/pi-pet/memories.json, which is
+    ~/.local/state/pi-pet/memories.json unless XDG_STATE_HOME says otherwise."""
+    base = os.environ.get('XDG_STATE_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'state')
+    return os.path.join(base, 'pi-pet', 'memories.json')
+
+
+def load_memories(path):
+    """Pi Pet's memories from disk. A missing, unreadable or damaged file (or a damaged entry) means
+    starting fresh for it, never a crash."""
+    memories = dict(DEFAULT_MEMORIES)
+    try:
+        with open(path) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return memories
+    if not isinstance(saved, dict):
+        return memories
+    for key in ('visits', 'times_petted', 'shooting_stars_seen'):
+        value = saved.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            memories[key] = value
+    try:
+        memories['first_met'] = datetime.date.fromisoformat(saved.get('first_met')).isoformat()
+    except (TypeError, ValueError):
+        pass
+    last_seen = saved.get('last_seen')
+    if isinstance(last_seen, (int, float)) and not isinstance(last_seen, bool):
+        memories['last_seen'] = last_seen
+    return memories
+
+
+def save_memories(path, memories):
+    """Write the memories to a temporary file and swap it in, so a crash can't leave half a file.
+    Returns False (instead of raising) if it can't be written."""
+    temp_path = path + '.tmp'
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(temp_path, 'w') as f:
+            json.dump(memories, f, indent=2)
+        os.replace(temp_path, path)
+        return True
+    except OSError:
+        return False
+
+
+def update_memories(path, add=None, first_met=None, last_seen=None):
+    """Add counts to the memories on disk and return what's saved. It re-reads the file first, so two
+    Pi Pets running at once each add their own counts instead of overwriting each other's."""
+    memories = load_memories(path)
+    for key, amount in (add or {}).items():
+        memories[key] += amount
+    if first_met and not memories['first_met']:
+        memories['first_met'] = first_met
+    if last_seen is not None:
+        memories['last_seen'] = last_seen
+    save_memories(path, memories)
+    return memories
+
+
 class LiveState:
     """What the live view keeps between frames: the mood, what the pet is saying, petting and greetings.
 
@@ -1071,11 +1158,20 @@ class LiveState:
     PET_KEYS = (ord('p'), ord('P'))
     HELP_KEYS = (ord('?'), ord('h'), ord('H'))
 
-    def __init__(self, vitals, rng=random):
+    def __init__(self, vitals, rng=random, memories=None, wall_time=None):
+        """memories: what load_memories found, or None to remember nothing. wall_time: time.time() now."""
         self.vitals = vitals
         self.rng = rng
         self.mood = vitals.mood()
-        self.saying = CLAUDE_GREETING if vitals.claude_here else pick_saying(self.mood, vitals, rng)
+        self.memories = memories
+        self.unsaved = {}  # counts added since the last save, for run_live to write with update_memories
+        last_seen = memories['last_seen'] if memories else None
+        if last_seen is not None and wall_time is not None and wall_time - last_seen >= MISSED_YOU_SECONDS:
+            self.saying = MISSED_YOU_SAYING
+        elif vitals.claude_here:
+            self.saying = CLAUDE_GREETING
+        else:
+            self.saying = pick_saying(self.mood, vitals, rng)
         self.petted_until = 0
         self.was_petted = False
         self.claude_was_here = vitals.claude_here
@@ -1090,6 +1186,8 @@ class LiveState:
         if key in self.PET_KEYS:
             if not self.was_petted:
                 self.saying = self.rng.choice(SAYINGS['happy'])
+                if now >= self.petted_until:
+                    self.remember('times_petted')  # once per petting, not per key press
             self.petted_until = now + PET_SECONDS  # petting again keeps it happy longer
         if key in self.HELP_KEYS:
             self.show_help = not self.show_help
@@ -1122,10 +1220,19 @@ class LiveState:
     def notice(self, cells, now):
         """Look at the frame that was just drawn: a shooting star appearing makes the pet say WISH_SAYING."""
         streak = any(color == 'shooting_star' for *_, color in cells)
-        if streak and not self.streak_on_screen and now >= self.petted_until:
-            self.saying = WISH_SAYING
-            self.wish_until = now + WISH_SECONDS
+        if streak and not self.streak_on_screen:
+            self.remember('shooting_stars_seen')
+            if now >= self.petted_until:
+                self.saying = WISH_SAYING
+                self.wish_until = now + WISH_SECONDS
         self.streak_on_screen = streak
+
+    def remember(self, key):
+        """Count something for the memories file (if the pet is remembering at all)."""
+        if self.memories is None:
+            return
+        self.memories[key] += 1
+        self.unsaved[key] = self.unsaved.get(key, 0) + 1
 
 
 def curses_colors():
@@ -1162,24 +1269,33 @@ def run_live(screen, forced_mood=None, interface=None):
     curses.curs_set(0)
     screen.nodelay(True)
     colors = curses_colors()
-    state = LiveState(Vitals(forced_mood, interface))
+    path = memories_path()
+    state = LiveState(Vitals(forced_mood, interface), memories=load_memories(path), wall_time=time.time())
+    state.memories = update_memories(path, add={'visits': 1}, first_met=datetime.date.today().isoformat())
     tick = 0
 
-    while True:
-        now = time.monotonic()
-        if not state.press(screen.getch(), now):
-            return
-        shown_mood = state.step(tick, now)
+    try:
+        while True:
+            now = time.monotonic()
+            if not state.press(screen.getch(), now):
+                return
+            shown_mood = state.step(tick, now)
 
-        screen.erase()
-        height, width = screen.getmaxyx()
-        cells = layout(height, width, shown_mood, tick, state.saying, state.vitals, show_help=state.show_help)
-        for row, col, text, color in cells:
-            screen.addstr(row, col, text, colors[color])
-        screen.refresh()
-        state.notice(cells, now)
-        tick += 1
-        time.sleep(1 / FPS)
+            screen.erase()
+            height, width = screen.getmaxyx()
+            cells = layout(height, width, shown_mood, tick, state.saying, state.vitals,
+                           show_help=state.show_help, memories=state.memories)
+            for row, col, text, color in cells:
+                screen.addstr(row, col, text, colors[color])
+            screen.refresh()
+            state.notice(cells, now)
+            if state.unsaved:
+                state.memories = update_memories(path, add=state.unsaved)
+                state.unsaved = {}
+            tick += 1
+            time.sleep(1 / FPS)
+    finally:
+        update_memories(path, add=state.unsaved, last_seen=time.time())  # also on Ctrl+C
 
 
 def main():

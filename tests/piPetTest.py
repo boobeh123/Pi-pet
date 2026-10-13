@@ -3,8 +3,11 @@
     python3 -m unittest discover -s tests -p "*Test.py"
 """
 
+import datetime
 import io
+import json
 import os
+import tempfile
 import random
 import sys
 import unicodedata
@@ -985,6 +988,100 @@ class WishTest(unittest.TestCase):
         state.step(1, now=10.0)
         state.notice(self.STREAK, now=10.5)
         self.assertIn(state.saying, piPet.SAYINGS['happy'])
+
+
+class MemoriesTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        self.path = os.path.join(self.dir, 'pi-pet', 'memories.json')
+
+    def write(self, content):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, 'w') as f:
+            f.write(content if isinstance(content, str) else json.dumps(content))
+
+    def make_state(self, memories, wall_time=1_000_000.0, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0), memories=memories, wall_time=wall_time)
+
+    def test_lives_in_the_xdg_state_folder(self):
+        with mock.patch.dict(os.environ, {'XDG_STATE_HOME': '/somewhere'}):
+            self.assertEqual(piPet.memories_path(), '/somewhere/pi-pet/memories.json')
+        with mock.patch.dict(os.environ, {'HOME': '/home/someone'}, clear=True):
+            self.assertEqual(piPet.memories_path(), '/home/someone/.local/state/pi-pet/memories.json')
+
+    def test_missing_or_damaged_file_means_starting_fresh(self):
+        self.assertEqual(piPet.load_memories(self.path), piPet.DEFAULT_MEMORIES)
+        for content in ('{not json', '[1, 2, 3]', '"hello"', ''):
+            with self.subTest(content=content):
+                self.write(content)
+                self.assertEqual(piPet.load_memories(self.path), piPet.DEFAULT_MEMORIES)
+
+    def test_damaged_entries_are_reset_one_by_one(self):
+        self.write({'first_met': 'last tuesday', 'visits': -3, 'times_petted': True, 'shooting_stars_seen': 4,
+                    'last_seen': 'yesterday'})
+        memories = piPet.load_memories(self.path)
+        self.assertEqual(memories, {**piPet.DEFAULT_MEMORIES, 'shooting_stars_seen': 4})
+
+    def test_save_and_load(self):
+        memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'shooting_stars_seen': 1, 'last_seen': 123.5}
+        self.assertTrue(piPet.save_memories(self.path, memories))
+        self.assertEqual(piPet.load_memories(self.path), memories)
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), ['memories.json'], 'no temporary file left behind')
+
+    def test_an_unwritable_place_is_not_a_crash(self):
+        blocker = os.path.join(self.dir, 'a-file')
+        with open(blocker, 'w'):
+            pass
+        self.assertFalse(piPet.save_memories(os.path.join(blocker, 'memories.json'), dict(piPet.DEFAULT_MEMORIES)))
+
+    def test_two_pets_at_once_add_up_instead_of_overwriting(self):
+        piPet.update_memories(self.path, add={'visits': 1}, first_met='2026-10-12')
+        piPet.update_memories(self.path, add={'visits': 1}, first_met='2026-10-13')  # a second window
+        piPet.update_memories(self.path, add={'times_petted': 2})
+        saved = piPet.update_memories(self.path, add={'times_petted': 3}, last_seen=99.0)
+        self.assertEqual((saved['visits'], saved['times_petted'], saved['last_seen']), (2, 5, 99.0))
+        self.assertEqual(saved['first_met'], '2026-10-12', 'the first meeting is never overwritten')
+
+    def test_missed_you_after_a_day_away(self):
+        away = lambda seconds: {**piPet.DEFAULT_MEMORIES, 'last_seen': 1_000_000.0 - seconds}
+        self.assertEqual(self.make_state(away(piPet.MISSED_YOU_SECONDS)).saying, piPet.MISSED_YOU_SAYING)
+        self.assertEqual(self.make_state(away(piPet.MISSED_YOU_SECONDS), claude_here=True).saying,
+                         piPet.MISSED_YOU_SAYING, 'missing you comes before greeting Claude')
+        self.assertNotEqual(self.make_state(away(3600)).saying, piPet.MISSED_YOU_SAYING)
+        self.assertNotEqual(self.make_state(dict(piPet.DEFAULT_MEMORIES)).saying, piPet.MISSED_YOU_SAYING)
+
+    def test_counts_each_petting_once_and_each_shooting_star(self):
+        state = self.make_state(dict(piPet.DEFAULT_MEMORIES))
+        state.press(ord('p'), now=10.0)
+        state.press(ord('p'), now=10.0)  # two presses in one frame
+        state.step(1, now=10.0)
+        state.press(ord('p'), now=11.0)  # still happy: the same petting
+        state.step(2, now=11.0 + piPet.PET_SECONDS)  # happy is over
+        state.press(ord('p'), now=20.0)  # a new petting
+        state.notice([(0, 40, '--*', 'shooting_star')], now=30.0)
+        self.assertEqual(state.unsaved, {'times_petted': 2, 'shooting_stars_seen': 1})
+        self.assertEqual(state.memories['times_petted'], 2)
+
+    def test_not_remembering_is_fine(self):
+        state = self.make_state(None)
+        state.press(ord('p'), now=10.0)
+        state.notice([(0, 40, '--*', 'shooting_star')], now=30.0)
+        self.assertEqual(state.unsaved, {})
+
+    def test_the_help_screen_tells_your_story(self):
+        memories = {'first_met': '2026-10-08', 'visits': 1, 'times_petted': 12, 'shooting_stars_seen': 3, 'last_seen': None}
+        line = piPet.describe_memories(memories, today=datetime.date(2026, 10, 12))
+        self.assertEqual(line, 'met Oct 8, 2026 (4 days ago)  ·  1 visit  ·  petted 12 times  ·  3 shooting stars seen')
+        self.assertIn('(today)', piPet.describe_memories({**memories, 'first_met': '2026-10-12'}, datetime.date(2026, 10, 12)))
+        self.assertIn('(yesterday)', piPet.describe_memories({**memories, 'first_met': '2026-10-11'}, datetime.date(2026, 10, 12)))
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True, memories=memories)
+        self.assertTrue(any(text == 'Together' for *_, text, _ in cells))
+        no_memories = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True)
+        self.assertFalse(any(text == 'Together' for *_, text, _ in no_memories))
 
 
 class HelpTest(unittest.TestCase):
