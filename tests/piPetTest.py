@@ -3,8 +3,11 @@
     python3 -m unittest discover -s tests -p "*Test.py"
 """
 
+import datetime
 import io
+import json
 import os
+import tempfile
 import random
 import sys
 import unicodedata
@@ -16,13 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import piPet  # noqa: E402  (imported after the path is set)
 
 DAY = 86400
+HOLIDAYS = (None, 'halloween', 'christmas', 'new_year', 'pi_day', 'birthday')
 TICKS = range(24)  # long enough to cover every animation cycle (blink is every 12 ticks)
 
 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0, day_of_year=200):
+                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -43,6 +47,9 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.moon_age = moon_age
     vitals.sky_seed = sky_seed
     vitals.day_of_year = day_of_year
+    vitals.dns_answering = dns_answering
+    vitals.holiday = holiday
+    vitals.year = year
     return vitals
 
 
@@ -168,7 +175,7 @@ class LayoutTest(unittest.TestCase):
         cells = piPet.layout(24, 80, 'content', 1, 'just vibing', make_vitals())
         texts = [text for _, _, text, _ in cells]
         self.assertIn('(  just vibing  )', texts)
-        self.assertIn('p to pet  ·  q to quit', texts)
+        self.assertIn('p to pet  ·  w to water  ·  ? for help  ·  q to quit', texts)
         self.assertTrue(any(text.startswith('temp ') for text in texts), 'full status line expected')
 
     def test_tiny_window_shows_a_message(self):
@@ -270,10 +277,14 @@ class SceneTest(unittest.TestCase):
                 for mood in piPet.FACES:
                     for tick in TICKS:
                         cells = piPet.layout(height, width, mood, tick, piPet.SAYINGS[mood][-1],
-                                             make_vitals(hour=hour, claude_here=True, uptime_sec=8 * DAY,
+                                             make_vitals(hour=hour, claude_here=True,
+                                                         uptime_sec=(8 * DAY, 0.5 * DAY)[tick % 2],  # flower or sprout
                                                          pi_vitals_running=True, moon_age=(0.2, 14.8, 22)[tick % 3],
                                                          day_of_year=tick * 15,
-                                                         adguard_running=tick % 2 == 0))  # guard awake or asleep
+                                                         adguard_running=tick % 2 == 0,  # guard awake or asleep
+                                                         dns_answering=tick % 4 != 0,  # and sometimes alarmed
+                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]),
+                                             watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(size=(height, width), hour=hour, mood=mood, tick=tick, text=text):
@@ -646,7 +657,8 @@ class ShootingStarTest(unittest.TestCase):
             for moon_age in (0.2, 7.4, 14.8):
                 for hour in (19.0, 0.0, 4.5):
                     for tick in self.streak_ticks(seed=width, windows=40, width=width):
-                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width, day_of_year=tick % 366)
+                        cells = piPet.build_sky(width, hour, tick, moon_age=moon_age, seed=width, day_of_year=tick % 366,
+                                                holiday=(None, 'halloween', 'new_year')[tick % 3])
                         drawn += any(color == 'shooting_star' for *_, color in cells)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -656,6 +668,15 @@ class ShootingStarTest(unittest.TestCase):
                                     self.assertNotIn((row, col + offset), seen)
                                     seen.add((row, col + offset))
         self.assertGreater(drawn, 100)
+
+
+class ClipTest(unittest.TestCase):
+    def test_clip_to_width(self):
+        cases = [((5, 'abc'), (5, 'abc')), ((-1, 'abc'), (0, 'bc')), ((-3, 'abc'), (0, '')), ((-9, 'abc'), (0, '')),
+                 ((8, 'abc'), (8, 'a')), ((9, 'abc'), (9, '')), ((7, 'abc'), (7, 'ab'))]
+        for (col, text), expected in cases:
+            with self.subTest(col=col, text=text):
+                self.assertEqual(piPet.clip_to_width(col, text, width=10), expected)
 
 
 class CloudTest(unittest.TestCase):
@@ -688,7 +709,7 @@ class CloudTest(unittest.TestCase):
             for load in (0.0, 1.0, 3.0):
                 for hour in (6.1, 6.5, 9.0, 12.0, 15.0, 17.5, 17.9):  # includes dawn and dusk, with stars
                     for tick in range(0, 1200, 25):
-                        cells = piPet.build_sky(width, hour, tick, load)
+                        cells = piPet.build_sky(width, hour, tick, load, holiday='pi_day' if tick % 2 else None)
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(width=width, load=load, hour=hour, tick=tick, text=text):
@@ -705,6 +726,196 @@ class CloudTest(unittest.TestCase):
                 self.assertTrue(is_one_column(char))
 
 
+class HolidayTest(unittest.TestCase):
+    def layout(self, holiday, hour=21.0, tick=1, width=80, **readings):
+        vitals = make_vitals(holiday=holiday, hour=hour, uptime_sec=4 * DAY, **readings)
+        return piPet.layout(24, width, 'content', tick, 'hi', vitals)
+
+    def test_dates(self):
+        cases = [((10, 24), None), ((10, 25), 'halloween'), ((10, 31), 'halloween'), ((11, 1), None),
+                 ((12, 19), None), ((12, 20), 'christmas'), ((12, 26), 'christmas'), ((12, 27), None),
+                 ((12, 31), 'new_year'), ((1, 1), 'new_year'), ((1, 2), None), ((3, 14), 'pi_day'),
+                 ((10, 8), 'birthday'), ((7, 15), None)]
+        for (month, day), holiday in cases:
+            with self.subTest(date=(month, day)):
+                self.assertEqual(piPet.holiday_on(month, day), holiday)
+
+    def test_new_art_is_one_column_and_lines_up(self):
+        art = ([piPet.PARTY_HAT, piPet.SANTA_HAT, piPet.PUMPKIN_HAT, 'o'] + piPet.PUMPKIN + piPet.BAT_FRAMES
+               + piPet.PI_DAY_CLOUDS[0]
+               + [text for frame in piPet.FIREWORK_FRAMES for _, _, text in frame])
+        for char in ''.join(art):
+            self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
+        for hat, _ in piPet.HOLIDAY_HATS.values():
+            self.assertEqual(len(hat), piPet.PET_WIDTH)
+        self.assertEqual(len({len(line) for line in piPet.PUMPKIN}), 1)
+        self.assertEqual(len({len(line) for line in piPet.PI_DAY_CLOUDS[0]}), 1)
+
+    def test_holiday_hats_replace_the_leaf(self):
+        cases = [('birthday', piPet.PARTY_HAT, 'sun'), ('christmas', piPet.SANTA_HAT, 'berry'),
+                 ('halloween', piPet.PUMPKIN_HAT, 'pumpkin')]
+        for holiday, hat, color in cases:
+            with self.subTest(holiday=holiday):
+                self.assertEqual(piPet.build_pet('content', 1, holiday)[0], (hat, color))
+        self.assertEqual(piPet.PARTY_HAT, '     /*\\     ', 'the birthday party hat stays as it is')
+        for holiday in (None, 'new_year', 'pi_day'):
+            with self.subTest(holiday=holiday):
+                self.assertEqual(piPet.build_pet('content', 1, holiday)[0], ('    \\\\|//    ', 'leaf'))
+
+    def test_birthday_lines_know_the_age(self):
+        self.assertIn('I was born today!', piPet.holiday_sayings(make_vitals(holiday='birthday', year=2026)))
+        self.assertIn("I'm 1 today!", piPet.holiday_sayings(make_vitals(holiday='birthday', year=2027)))
+        self.assertEqual(piPet.holiday_sayings(make_vitals()), [])
+
+    def test_jack_o_lantern_sits_on_the_grass_past_the_plant_and_flickers(self):
+        cells = self.layout('halloween')
+        ground_row = next(row for row, _, _, color in cells if color == 'grass')
+        face = [(row, col, color) for row, col, text, color in cells if text == piPet.PUMPKIN[1]]
+        pot_col = next(col for row, col, text, color in cells if color == 'pot')
+        self.assertEqual(face[0][0], ground_row - 1)
+        self.assertGreater(face[0][1], pot_col + 4)
+        flames = {color for tick in TICKS for *_, text, color in self.layout('halloween', tick=tick) if text == piPet.PUMPKIN[1]}
+        self.assertEqual(flames, {'pumpkin', 'sunset'})
+        self.assertFalse([cell for cell in self.layout('halloween', width=40) if cell[2] == piPet.PUMPKIN[1]],
+                         'no room at 40 columns')
+        self.assertFalse([cell for cell in self.layout(None) if cell[2] == piPet.PUMPKIN[1]])
+
+    def test_bats_fly_on_halloween_nights_only(self):
+        def bats(holiday, hour):
+            return [text for tick in TICKS for *_, text, color in piPet.build_sky(80, hour, tick, holiday=holiday)
+                    if text in piPet.BAT_FRAMES]
+        self.assertEqual(set(bats('halloween', 21.0)), set(piPet.BAT_FRAMES), 'they flap')
+        self.assertEqual(bats('halloween', 12.0), [])
+        self.assertEqual(bats(None, 21.0), [])
+
+    def test_christmas_lights_string_along_the_grass(self):
+        for width in (40, 80, 120):
+            pieces = piPet.build_ground(width, 'christmas', tick=0)
+            covered = ''.join(text for _, text, _ in sorted(pieces))
+            with self.subTest(width=width):
+                self.assertEqual(len(covered), width - 1, 'the pieces cover the line exactly once')
+                bulbs = [col for col, text, _ in pieces if text == 'o']
+                self.assertEqual(bulbs, list(range(piPet.LIGHT_SPACING // 2, width - 1, piPet.LIGHT_SPACING)))
+        colors_now = [color for _, text, color in piPet.build_ground(80, 'christmas', tick=0) if text == 'o']
+        colors_later = [color for _, text, color in piPet.build_ground(80, 'christmas', tick=4) if text == 'o']
+        self.assertNotEqual(colors_now, colors_later, 'the colors chase along the string')
+        self.assertEqual(piPet.build_ground(80), [(0, piPet.build_ground(80)[0][1], 'grass')])
+
+    def test_fireworks_light_up_new_years_night(self):
+        windows = 200
+        with_a_firework = sum(
+            any(piPet.build_fireworks(80, window * piPet.FIREWORK_WINDOW + t, seed=3)
+                for t in range(piPet.FIREWORK_WINDOW))
+            for window in range(windows))
+        self.assertTrue(0.5 < with_a_firework / windows < 0.8, with_a_firework)
+        burst_tick = next(t for t in range(5000) if len(piPet.build_fireworks(80, t, seed=3)) == 3)
+        steps = [piPet.build_fireworks(80, t, seed=3) for t in range(burst_tick - 2, burst_tick + 2)]
+        self.assertEqual([len(cells) for cells in steps], [1, 1, 3, 4], 'rocket, rocket, bang, sparks')
+        self.assertEqual(len({color for cells in steps for *_, color in cells}), 1, 'one color per firework')
+        for width in (40, 80, 120):
+            for tick in range(0, 3000, 3):
+                for row, col, text, _ in piPet.build_fireworks(width, tick, seed=width):
+                    self.assertTrue(0 <= row < piPet.SKY_HEIGHT and col >= 0 and col + len(text) <= width - 1)
+        night = {color for t in range(burst_tick - 2, burst_tick + 2)
+                 for *_, color in piPet.build_sky(80, 23.5, t, seed=3, holiday='new_year')}
+        self.assertTrue(night & set(piPet.FIREWORK_COLORS))
+        day = [cell for t in range(burst_tick - 2, burst_tick + 2)
+               for cell in piPet.build_sky(80, 12.0, t, seed=3, holiday='new_year') if cell[2] in ('-*-', "'")]
+        self.assertEqual(day, [], 'fireworks are for the night')
+
+    def test_pi_day_clouds_know_their_digits(self):
+        sky = piPet.build_sky(80, 11.0, 100, load=1.0, holiday='pi_day')
+        self.assertTrue(any('3.14159' in text for *_, text, _ in sky))
+
+    def test_holiday_lines_in_calm_moods_only_on_the_day(self):
+        rng = random.Random(6)
+        halloween = {piPet.pick_saying('content', make_vitals(holiday='halloween'), rng) for _ in range(200)}
+        self.assertTrue(halloween & set(piPet.HOLIDAY_SAYINGS['halloween']))
+        dizzy = {piPet.pick_saying('dizzy', make_vitals(holiday='halloween'), rng) for _ in range(100)}
+        self.assertTrue(dizzy <= set(piPet.SAYINGS['dizzy']))
+
+    def test_help_mentions_the_holiday(self):
+        for holiday, description in piPet.HOLIDAY_DESCRIPTIONS.items():
+            lines = piPet.build_help(make_vitals(holiday=holiday), 'content')
+            with self.subTest(holiday=holiday):
+                self.assertIn(('Today', description, 'plain'), lines)
+        self.assertFalse([line for line in piPet.build_help(make_vitals(), 'content') if line[0] == 'Today'])
+
+    def test_every_holiday_has_lines_and_a_description(self):
+        holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
+        self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
+        self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
+
+
+class WaterTest(unittest.TestCase):
+    def make_state(self, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0), memories=dict(piPet.DEFAULT_MEMORIES))
+
+    def watering_cells(self, uptime_sec=8 * DAY, width=80, tick=1):
+        cells = piPet.layout(24, width, 'content', tick, 'hi', make_vitals(uptime_sec=uptime_sec), watering=True)
+        return cells, [cell for cell in cells if cell[2] in piPet.WATERING_CAN or (cell[2] == "'" and cell[3] == 'extra')]
+
+    def test_watering_art_lines_up(self):
+        self.assertEqual(len({len(line) for line in piPet.WATERING_CAN}), 1)
+        for char in ''.join(piPet.WATERING_CAN):
+            self.assertTrue(is_one_column(char))
+
+    def test_w_waters_for_a_few_seconds_and_the_plant_says_thanks(self):
+        state = self.make_state()
+        state.press(ord('w'), now=10.0)
+        self.assertTrue(state.watering(10.0))
+        self.assertEqual(state.saying, piPet.WATER_SAYING)
+        state.step(1, now=10.0 + piPet.WATER_SECONDS - 0.1)
+        self.assertEqual(state.saying, piPet.WATER_SAYING)
+        self.assertFalse(state.watering(10.0 + piPet.WATER_SECONDS))
+        state.step(2, now=10.0 + piPet.WATER_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['content'], 'back to its own lines when the can is put away')
+
+    def test_each_watering_counts_once(self):
+        state = self.make_state()
+        state.press(ord('w'), now=10.0)
+        state.press(ord('w'), now=11.0)  # still pouring
+        state.press(ord('w'), now=20.0)  # a new watering
+        self.assertEqual(state.unsaved, {'times_watered': 2})
+
+    def test_petting_keeps_its_line_while_watering(self):
+        state = self.make_state()
+        state.press(ord('p'), now=10.0)
+        state.step(1, now=10.0)
+        state.press(ord('w'), now=10.5)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+
+    def test_the_can_pours_onto_the_plant(self):
+        for uptime_sec in (0.5 * DAY, 2 * DAY, 4 * DAY, 8 * DAY):
+            cells, watering = self.watering_cells(uptime_sec)
+            pot = next((row, col) for row, col, _, color in cells if color == 'pot')
+            plant_top = min(row for row, col, text, color in cells
+                            if color in ('leaf', 'berry', 'pot') and col >= pot[1] and len(text) == 5)
+            spout = next((row, col) for row, col, text, _ in watering if text == piPet.WATERING_CAN[1])
+            # A tall plant leaves room for one drop row, which drips every other frame, so look at a few frames
+            drops = [(row, col) for tick in range(1, 5) for row, col, text, _ in self.watering_cells(uptime_sec, tick=tick)[1]
+                     if text == "'"]
+            with self.subTest(days=uptime_sec / DAY):
+                self.assertEqual(spout[1], pot[1] + 2, 'the spout is over the middle of the plant')
+                self.assertTrue(drops)
+                self.assertTrue(all(col == spout[1] and spout[0] < row < plant_top for row, col in drops))
+
+    def test_no_can_without_a_plant_or_room(self):
+        self.assertEqual(self.watering_cells(uptime_sec=None)[1], [])
+        self.assertEqual(self.watering_cells(width=40)[1], [])
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(uptime_sec=8 * DAY))
+        self.assertFalse([cell for cell in cells if cell[2] in piPet.WATERING_CAN])
+
+    def test_key_hint_fits_the_window(self):
+        for width, hint in ((80, 'p to pet  ·  w to water  ·  ? for help  ·  q to quit'),
+                            (40, 'p pet · w water · ? help · q quit'), (piPet.MIN_WIDTH, 'p pet · ? help · q quit')):
+            cells = piPet.layout(24, width, 'content', 1, 'hi', make_vitals())
+            with self.subTest(width=width):
+                self.assertIn(hint, [text for *_, text, _ in cells])
+
+
 class OnceTest(unittest.TestCase):
     def test_render_lines_places_text_and_trims_blank_space(self):
         cells = [(1, 2, 'hi', 'plain'), (3, 0, 'there', 'leaf')]
@@ -719,7 +930,8 @@ class OnceTest(unittest.TestCase):
         colors = set()
         for mood in piPet.FACES:
             for hour, running in ((12.0, True), (22.0, False)):
-                vitals = make_vitals(hour=hour, claude_here=True, adguard_running=running, uptime_sec=8 * DAY, online=False)
+                vitals = make_vitals(hour=hour, claude_here=True, adguard_running=running, uptime_sec=8 * DAY, online=False,
+                                     holiday=HOLIDAYS[hash(mood) % len(HOLIDAYS)])
                 colors |= {color for *_, color in piPet.layout(24, 80, mood, 1, 'hi', vitals)}
         self.assertLessEqual(colors, set(piPet.ANSI_COLORS))
 
@@ -803,6 +1015,417 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(away & set(piPet.DOCTOR_SAYINGS))
 
 
+SAMPLE_UDP6 = """\
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops
+ 2104: 00000000000000000000000000000000:0035 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0
+ 2105: 0000000000000000FFFF00003C44A8C0:D2F1 0000000000000000FFFF00000144A8C0:0035 01 00000000:00000000 00:00000000 00000000  1000        0 2 2 0
+"""
+
+
+class DnsGuardTest(unittest.TestCase):
+    def test_finds_a_bound_dns_socket_without_sending_anything(self):
+        with fake_file(SAMPLE_UDP6):
+            self.assertTrue(piPet.is_udp_port_bound(53))
+        connected_only = '\n'.join(line for line in SAMPLE_UDP6.splitlines() if ' 2104:' not in line)
+        with fake_file(connected_only):
+            self.assertFalse(piPet.is_udp_port_bound(53), 'a query sent to port 53 is not a server on port 53')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertFalse(piPet.is_udp_port_bound(53))
+
+    def test_alarmed_frames_line_up(self):
+        for frame in piPet.GUARD_ALARMED:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char))
+
+    def guard_faces(self, **readings):
+        faces = set()
+        for tick in TICKS:
+            cells = piPet.layout(24, 80, 'content', tick, 'hi', make_vitals(**readings))
+            faces |= {(text, color) for _, _, text, color in cells if text.startswith('(') and text.endswith(')') and len(text) == 5}
+        return faces
+
+    def test_guard_raises_the_alarm_when_dns_stops_being_served(self):
+        faces = self.guard_faces(adguard_running=True, dns_answering=False)
+        self.assertEqual(faces, {('(O_O)', 'alert')})
+        self.assertEqual(piPet.build_alerts(make_vitals(adguard_running=True, dns_answering=False)), 'DNS port 53 closed')
+
+    def test_no_dns_alarm_unless_adguard_runs_and_the_port_is_closed(self):
+        for readings in (dict(adguard_running=True, dns_answering=True), dict(adguard_running=True, dns_answering=None),
+                         dict(adguard_running=None), dict(adguard_running=False, dns_answering=False)):
+            with self.subTest(readings=readings):
+                self.assertNotIn('DNS', piPet.build_alerts(make_vitals(**readings)))
+                self.assertNotIn(('(O_O)', 'alert'), self.guard_faces(**readings))
+
+    def test_no_bragging_about_the_guard_while_dns_is_down(self):
+        rng = random.Random(5)
+        said = {piPet.pick_saying('content', make_vitals(adguard_running=True, dns_answering=False), rng) for _ in range(200)}
+        self.assertFalse(said & set(piPet.GUARD_SAYINGS))
+
+
+class LiveStateTest(unittest.TestCase):
+    """The live view's timing rules, driven with a fake clock and scripted readings."""
+
+    def make_state(self, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None  # readings change only when a test changes them
+        return piPet.LiveState(vitals, rng=random.Random(0))
+
+    def counting_sayings(self):
+        """Patch pick_saying so every new pick is visibly different: 'saying 1', 'saying 2', ..."""
+        count = iter(range(1, 1000))
+        return mock.patch.object(piPet, 'pick_saying', side_effect=lambda *args: f'saying {next(count)}')
+
+    def test_opening_line(self):
+        self.assertEqual(self.make_state(claude_here=True).saying, piPet.CLAUDE_GREETING)
+        self.assertIn(self.make_state().saying, piPet.SAYINGS['content'])
+
+    def test_quit_keys(self):
+        state = self.make_state()
+        for key in (ord('q'), ord('Q'), 27):
+            self.assertFalse(state.press(key, now=0))
+        for key in (-1, ord('x'), ord('p')):
+            self.assertTrue(state.press(key, now=0))
+
+    def test_new_saying_every_ten_seconds_but_not_at_the_start(self):
+        with self.counting_sayings():
+            state = self.make_state()
+            opening = state.saying
+            for tick in range(piPet.FPS * 10):
+                state.step(tick, now=tick / piPet.FPS)
+                self.assertEqual(state.saying, opening, f'tick {tick}')
+            state.step(piPet.FPS * 10, now=10.0)
+            self.assertNotEqual(state.saying, opening)
+
+    def test_mood_change_brings_a_new_saying(self):
+        with self.counting_sayings():
+            state = self.make_state()
+            state.step(0, now=0)
+            state.vitals.load = 3.0  # busy now
+            state.step(1, now=0.25)
+            self.assertEqual(state.mood, 'content', 'sensors are only read every 2 seconds')
+            before = state.saying
+            state.step(piPet.FPS * 2, now=2.0)
+            self.assertEqual(state.mood, 'busy')
+            self.assertNotEqual(state.saying, before)
+
+    def test_petting(self):
+        state = self.make_state()
+        state.step(0, now=99.0)
+        state.press(ord('p'), now=100.0)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+        self.assertEqual(state.step(1, now=100.0), 'happy')
+        self.assertEqual(state.step(2, now=100.0 + piPet.PET_SECONDS - 0.01), 'happy')
+        self.assertEqual(state.step(3, now=100.0 + piPet.PET_SECONDS), 'content')
+        self.assertIn(state.saying, piPet.SAYINGS['content'], 'back to its real mood')
+
+    def test_petting_again_keeps_it_happy_longer_without_changing_the_line(self):
+        state = self.make_state()
+        state.press(ord('p'), now=100.0)
+        state.step(1, now=100.0)
+        line = state.saying
+        state.press(ord('p'), now=102.0)
+        self.assertEqual(state.saying, line)
+        self.assertEqual(state.step(2, now=104.0), 'happy')
+        self.assertEqual(state.step(3, now=102.0 + piPet.PET_SECONDS), 'content')
+
+    def test_claude_arriving_gets_a_greeting_unless_the_pet_is_busy_being_petted(self):
+        state = self.make_state()
+        state.step(0, now=0)
+        state.vitals.claude_here = True
+        state.step(piPet.FPS * 2, now=2.0)
+        self.assertEqual(state.saying, piPet.CLAUDE_GREETING)
+
+        petted = self.make_state()
+        petted.step(0, now=0)
+        petted.press(ord('p'), now=1.0)
+        petted.vitals.claude_here = True
+        petted.step(piPet.FPS * 2, now=2.0)
+        self.assertIn(petted.saying, piPet.SAYINGS['happy'])
+
+
+class WishTest(unittest.TestCase):
+    STREAK = [(0, 40, '--*', 'shooting_star')]
+    NIGHT = [(1, 10, '.', 'plain')]
+
+    def make_state(self):
+        vitals = make_vitals()
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0))
+
+    def test_a_shooting_star_brings_a_wish_for_a_few_seconds(self):
+        state = self.make_state()
+        state.step(1, now=10.0)
+        state.notice(self.STREAK, now=10.0)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+        state.step(2, now=10.0 + piPet.WISH_SECONDS - 0.1)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+        state.step(3, now=10.0 + piPet.WISH_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['content'])
+
+    def test_one_wish_per_streak(self):
+        state = self.make_state()
+        state.notice(self.STREAK, now=10.0)
+        state.step(1, now=10.0 + piPet.WISH_SECONDS)  # the wish is over...
+        state.notice(self.STREAK, now=10.0 + piPet.WISH_SECONDS)  # ...but it's the same streak
+        self.assertNotEqual(state.saying, piPet.WISH_SAYING)
+        state.notice(self.NIGHT, now=20.0)
+        state.notice(self.STREAK, now=30.0)  # a new streak
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_the_wish_survives_the_saying_rotation(self):
+        state = self.make_state()
+        state.notice(self.STREAK, now=9.0)
+        state.step(piPet.FPS * 10, now=10.0)  # time for a new saying, but the pet is wishing
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_a_real_night_sky_brings_the_wish(self):
+        vitals = make_vitals(hour=22.0, sky_seed=1)
+        vitals.refresh = lambda: None
+        state = piPet.LiveState(vitals, rng=random.Random(0))
+        streak_tick = next(tick for tick in range(10_000) if piPet.build_shooting_star(80, tick, seed=1))
+        for tick in range(streak_tick - 2, streak_tick + 1):
+            mood = state.step(tick, now=tick / piPet.FPS)
+            state.notice(piPet.layout(24, 80, mood, tick, state.saying, vitals), now=tick / piPet.FPS)
+        self.assertEqual(state.saying, piPet.WISH_SAYING)
+
+    def test_no_wish_while_being_petted(self):
+        state = self.make_state()
+        state.press(ord('p'), now=10.0)
+        state.step(1, now=10.0)
+        state.notice(self.STREAK, now=10.5)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+
+
+class MemoriesTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.dir = temp_dir.name
+        self.path = os.path.join(self.dir, 'pi-pet', 'memories.json')
+
+    def write(self, content):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, 'w') as f:
+            f.write(content if isinstance(content, str) else json.dumps(content))
+
+    def make_state(self, memories, wall_time=1_000_000.0, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0), memories=memories, wall_time=wall_time)
+
+    def test_lives_in_the_xdg_state_folder(self):
+        with mock.patch.dict(os.environ, {'XDG_STATE_HOME': '/somewhere'}):
+            self.assertEqual(piPet.memories_path(), '/somewhere/pi-pet/memories.json')
+        with mock.patch.dict(os.environ, {'HOME': '/home/someone'}, clear=True):
+            self.assertEqual(piPet.memories_path(), '/home/someone/.local/state/pi-pet/memories.json')
+
+    def test_missing_or_damaged_file_means_starting_fresh(self):
+        self.assertEqual(piPet.load_memories(self.path), piPet.DEFAULT_MEMORIES)
+        for content in ('{not json', '[1, 2, 3]', '"hello"', ''):
+            with self.subTest(content=content):
+                self.write(content)
+                self.assertEqual(piPet.load_memories(self.path), piPet.DEFAULT_MEMORIES)
+
+    def test_damaged_entries_are_reset_one_by_one(self):
+        self.write({'first_met': 'last tuesday', 'visits': -3, 'times_petted': True, 'shooting_stars_seen': 4,
+                    'last_seen': 'yesterday'})
+        memories = piPet.load_memories(self.path)
+        self.assertEqual(memories, {**piPet.DEFAULT_MEMORIES, 'shooting_stars_seen': 4})
+
+    def test_save_and_load(self):
+        memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'times_watered': 2, 'shooting_stars_seen': 1,
+                    'last_seen': 123.5}
+        self.assertTrue(piPet.save_memories(self.path, memories))
+        self.assertEqual(piPet.load_memories(self.path), memories)
+        self.assertEqual(os.listdir(os.path.dirname(self.path)), ['memories.json'], 'no temporary file left behind')
+
+    def test_an_unwritable_place_is_not_a_crash(self):
+        blocker = os.path.join(self.dir, 'a-file')
+        with open(blocker, 'w'):
+            pass
+        self.assertFalse(piPet.save_memories(os.path.join(blocker, 'memories.json'), dict(piPet.DEFAULT_MEMORIES)))
+
+    def test_two_pets_at_once_add_up_instead_of_overwriting(self):
+        piPet.update_memories(self.path, add={'visits': 1}, first_met='2026-10-12')
+        piPet.update_memories(self.path, add={'visits': 1}, first_met='2026-10-13')  # a second window
+        piPet.update_memories(self.path, add={'times_petted': 2})
+        saved = piPet.update_memories(self.path, add={'times_petted': 3}, last_seen=99.0)
+        self.assertEqual((saved['visits'], saved['times_petted'], saved['last_seen']), (2, 5, 99.0))
+        self.assertEqual(saved['first_met'], '2026-10-12', 'the first meeting is never overwritten')
+
+    def test_missed_you_after_a_day_away(self):
+        away = lambda seconds: {**piPet.DEFAULT_MEMORIES, 'last_seen': 1_000_000.0 - seconds}
+        self.assertEqual(self.make_state(away(piPet.MISSED_YOU_SECONDS)).saying, piPet.MISSED_YOU_SAYING)
+        self.assertEqual(self.make_state(away(piPet.MISSED_YOU_SECONDS), claude_here=True).saying,
+                         piPet.MISSED_YOU_SAYING, 'missing you comes before greeting Claude')
+        self.assertNotEqual(self.make_state(away(3600)).saying, piPet.MISSED_YOU_SAYING)
+        self.assertNotEqual(self.make_state(dict(piPet.DEFAULT_MEMORIES)).saying, piPet.MISSED_YOU_SAYING)
+
+    def test_counts_each_petting_once_and_each_shooting_star(self):
+        state = self.make_state(dict(piPet.DEFAULT_MEMORIES))
+        state.press(ord('p'), now=10.0)
+        state.press(ord('p'), now=10.0)  # two presses in one frame
+        state.step(1, now=10.0)
+        state.press(ord('p'), now=11.0)  # still happy: the same petting
+        state.step(2, now=11.0 + piPet.PET_SECONDS)  # happy is over
+        state.press(ord('p'), now=20.0)  # a new petting
+        state.notice([(0, 40, '--*', 'shooting_star')], now=30.0)
+        self.assertEqual(state.unsaved, {'times_petted': 2, 'shooting_stars_seen': 1})
+        self.assertEqual(state.memories['times_petted'], 2)
+
+    def test_not_remembering_is_fine(self):
+        state = self.make_state(None)
+        state.press(ord('p'), now=10.0)
+        state.notice([(0, 40, '--*', 'shooting_star')], now=30.0)
+        self.assertEqual(state.unsaved, {})
+
+    def test_the_help_screen_tells_your_story(self):
+        memories = {'first_met': '2026-10-08', 'visits': 1, 'times_petted': 12, 'times_watered': 0, 'shooting_stars_seen': 3,
+                    'last_seen': None}
+        line = piPet.describe_memories(memories, today=datetime.date(2026, 10, 12))
+        self.assertEqual(line, 'met Oct 8, 2026 (4 days ago)  ·  1 visit  ·  petted 12 times  ·  3 shooting stars seen')
+        watered = piPet.describe_memories({**memories, 'times_watered': 4}, today=datetime.date(2026, 10, 12))
+        self.assertIn('plant watered 4 times', watered)
+        self.assertIn('(today)', piPet.describe_memories({**memories, 'first_met': '2026-10-12'}, datetime.date(2026, 10, 12)))
+        self.assertIn('(yesterday)', piPet.describe_memories({**memories, 'first_met': '2026-10-11'}, datetime.date(2026, 10, 12)))
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True, memories=memories)
+        self.assertTrue(any(text == 'Together' for *_, text, _ in cells))
+        no_memories = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True)
+        self.assertFalse(any(text == 'Together' for *_, text, _ in no_memories))
+
+
+class HelpTest(unittest.TestCase):
+    def help_rows(self, height=24, width=80, mood='content', **readings):
+        cells = piPet.layout(height, width, mood, 1, 'hi', make_vitals(**readings), show_help=True)
+        rows = {}
+        for row, col, text, color in sorted(cells):
+            rows.setdefault(row, []).append((col, text, color))
+        return cells, {row: ' '.join(text for _, text, _ in parts) for row, parts in rows.items()}
+
+    def test_format_duration(self):
+        cases = [(45, '45 s'), (12 * 60, '12 min'), (3 * 3600 + 5 * 60, '3 h 5 min'), (86400 + 4 * 3600, '1 day 4 h'),
+                 (2 * 86400 + 3600, '2 days 1 h')]
+        for seconds, text in cases:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(piPet.format_duration(seconds), text)
+
+    def test_moon_phase_names_follow_the_shapes(self):
+        cases = [(0.2, 'new moon'), (2.5, 'waxing crescent'), (7.4, 'first quarter'), (14.8, 'full moon'),
+                 (22.1, 'last quarter'), (26.5, 'waning crescent')]
+        for age, name in cases:
+            with self.subTest(age=age):
+                self.assertEqual(piPet.MOON_PHASE_NAMES[piPet.moon_eighth(age)], name)
+
+    def test_every_mood_is_explained_with_its_reading(self):
+        cases = [
+            ('dizzy', dict(undervoltage=True), 'undervoltage'),
+            ('hot', dict(temp_c=73.8), '73.8°C'),
+            ('stuffed', dict(disk_used_percent=93.2), '93% full'),
+            ('hungry', dict(memory_free_percent=6.8), '7% of memory'),
+            ('groggy', dict(uptime_sec=150), '2 min ago'),
+            ('lonely', dict(online=False), 'no route'),
+            ('busy', dict(load=2.6), 'load 2.60'),
+            ('surfing', dict(net_rate=420 * 1024), '420.0 KB/s on wlan0'),
+            ('sleepy', dict(load=0.1, net_rate=512), 'load 0.10'),
+            ('content', dict(), 'normal'),
+            ('happy', dict(), 'petted'),
+        ]
+        for mood, readings, expected in cases:
+            with self.subTest(mood=mood):
+                self.assertIn(expected, piPet.explain_mood(make_vitals(**readings), mood))
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='hot'), 'hot'), 'forced with --mood')
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='happy'), 'happy'), 'forced with --mood')
+        self.assertEqual(piPet.explain_mood(make_vitals(forced_mood='hot'), 'happy'), 'you just petted me')
+
+    def test_sky_is_described_for_the_time_of_day(self):
+        cases = [(10.0, 'day: the sun'), (6.5, 'dawn'), (17.5, 'dusk'), (22.0, 'night: full moon')]
+        for hour, expected in cases:
+            with self.subTest(hour=hour):
+                self.assertIn(expected, piPet.describe_sky(make_vitals(hour=hour, load=0.6)))
+        self.assertIn('2 clouds (load 0.60', piPet.describe_sky(make_vitals(hour=10.0, load=0.6)))
+
+    def test_pals_are_explained(self):
+        everyone = piPet.describe_pals(make_vitals(adguard_running=True, pi_vitals_running=True, claude_here=True), 'hot')
+        self.assertEqual([text.split()[0] for text, _ in everyone], ['guard', 'doctor', 'Claude'])
+        self.assertIn('worried', everyone[1][0])
+        alarmed = piPet.describe_pals(make_vitals(adguard_running=True, dns_answering=False), 'content')
+        self.assertEqual(alarmed[0][1], 'alert')
+        self.assertIn('port 53', alarmed[0][0])
+        self.assertIn('stopped', piPet.describe_pals(make_vitals(adguard_running=False), 'content')[0][0])
+        self.assertEqual(piPet.describe_pals(make_vitals(), 'content'), [('nobody is visiting right now', 'plain')])
+
+    def test_plant_is_explained(self):
+        self.assertIn('seedling, up 2 days 0 h (leafy at 3 days)', piPet.describe_plant(make_vitals(uptime_sec=2 * DAY)))
+        self.assertIn('in flower', piPet.describe_plant(make_vitals(uptime_sec=8 * DAY)))
+        self.assertIn('repots', piPet.describe_plant(make_vitals(uptime_sec=8 * DAY)))
+        self.assertIn('no uptime', piPet.describe_plant(make_vitals(uptime_sec=None)))
+
+    def test_help_screen_has_every_section_and_stays_inside(self):
+        for height, width in ((24, 80), (14, 40), (11, 24)):
+            cells, rows = self.help_rows(height, width, adguard_running=True, pi_vitals_running=True, claude_here=True)
+            for row, col, text, _ in cells:
+                with self.subTest(size=(height, width), text=text):
+                    self.assertTrue(0 <= row < height - 1 and col >= 0 and col + len(text) <= width - 1)
+        _, rows = self.help_rows(adguard_running=True, pi_vitals_running=True, claude_here=True)
+        labels = [text.split()[0] for row, text in sorted(rows.items())]
+        for label in ('Mood', 'Sky', 'Pals', 'Plant', 'Alerts', 'Keys'):
+            self.assertIn(label, labels)
+
+    def test_keys_fit_on_one_row_at_80_columns(self):
+        keys = next(text for label, text, _ in piPet.build_help(make_vitals(), 'content') if label == 'Keys')
+        self.assertLessEqual(len(keys), 80 - 13, 'the help text column starts at 12 and stops before the last column')
+
+    def test_alerts_show_in_red(self):
+        cells, _ = self.help_rows(online=False)
+        self.assertIn(('offline', 'alert'), [(text, color) for *_, text, color in cells])
+
+    def test_help_keys_toggle_the_screen(self):
+        vitals = make_vitals()
+        vitals.refresh = lambda: None
+        state = piPet.LiveState(vitals, rng=random.Random(0))
+        self.assertFalse(state.show_help)
+        state.press(ord('?'), now=0)
+        self.assertTrue(state.show_help)
+        state.press(ord('h'), now=0)
+        self.assertFalse(state.show_help)
+
+    def test_short_key_hint_in_a_narrow_window(self):
+        cells = piPet.layout(piPet.MIN_HEIGHT + 4, piPet.MIN_WIDTH, 'content', 1, 'hi', make_vitals())
+        self.assertIn('p pet · ? help · q quit', [text for *_, text, _ in cells])
+
+
+class CheerTest(unittest.TestCase):
+    def pal_faces(self, mood, tick=1, **readings):
+        cells = piPet.layout(24, 80, mood, tick, 'hi', make_vitals(**readings))
+        return {color: text for *_, text, color in cells
+                if color in ('guard', 'doctor', 'alert', 'dim') and text.startswith('(') and len(text) == 5}
+
+    def test_cheering_art_lines_up(self):
+        for frame in (piPet.GUARD_CHEERING, piPet.DOCTOR_CHEERING):
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            for char in ''.join(frame):
+                self.assertTrue(is_one_column(char))
+
+    def test_pals_cheer_while_the_pet_is_petted(self):
+        everyone = dict(adguard_running=True, pi_vitals_running=True)
+        self.assertEqual(self.pal_faces('happy', **everyone), {'guard': '(^_^)', 'doctor': '(^-^)'})
+        self.assertNotIn('(^_^)', self.pal_faces('content', **everyone).values())
+        self.assertNotIn('(^-^)', self.pal_faces('content', **everyone).values())
+
+    def test_a_dns_problem_or_a_nap_is_not_interrupted(self):
+        self.assertEqual(self.pal_faces('happy', adguard_running=True, dns_answering=False), {'alert': '(O_O)'})
+        self.assertEqual(self.pal_faces('happy', adguard_running=False), {'dim': '(-_-)'})
+
+    def test_claude_twinkles_faster_when_cheering(self):
+        def twinkles(mood):
+            frames = [tuple(text for *_, text, color in piPet.layout(24, 80, mood, tick, 'hi', make_vitals(claude_here=True))
+                            if color == 'claude') for tick in range(4)]
+            return len({frames[0], frames[2]})
+        self.assertEqual(twinkles('happy'), 2)
+        self.assertEqual(twinkles('content'), 1)
+
+
 class AlertTest(unittest.TestCase):
     def test_healthy_pi_has_no_alerts(self):
         self.assertEqual(piPet.build_alerts(make_vitals()), '')
@@ -816,7 +1439,7 @@ class AlertTest(unittest.TestCase):
         rows = {text: row for row, _, text, _ in cells}
         status_row = next(row for text, row in rows.items() if text.startswith('temp '))
         self.assertEqual(rows['offline'], status_row + 1)
-        self.assertIn('p to pet  ·  q to quit', rows)
+        self.assertIn('p to pet  ·  w to water  ·  ? for help  ·  q to quit', rows)
 
     def test_alert_line_gives_way_in_a_short_window(self):
         # The surfing pet is the tallest (waves); --mood surfing on an offline Pi still has an alert
