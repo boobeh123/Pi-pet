@@ -741,18 +741,26 @@ class HolidayTest(unittest.TestCase):
                 self.assertEqual(piPet.holiday_on(month, day), holiday)
 
     def test_new_art_is_one_column_and_lines_up(self):
-        art = ([piPet.PARTY_HAT, 'o'] + piPet.PUMPKIN + piPet.BAT_FRAMES + piPet.PI_DAY_CLOUDS[0]
+        art = ([piPet.PARTY_HAT, piPet.SANTA_HAT, piPet.PUMPKIN_HAT, 'o'] + piPet.PUMPKIN + piPet.BAT_FRAMES
+               + piPet.PI_DAY_CLOUDS[0]
                + [text for frame in piPet.FIREWORK_FRAMES for _, _, text in frame])
         for char in ''.join(art):
             self.assertTrue(is_one_column(char), f'{char!r} is not one column wide')
-        self.assertEqual(len(piPet.PARTY_HAT), piPet.PET_WIDTH)
+        for hat, _ in piPet.HOLIDAY_HATS.values():
+            self.assertEqual(len(hat), piPet.PET_WIDTH)
         self.assertEqual(len({len(line) for line in piPet.PUMPKIN}), 1)
         self.assertEqual(len({len(line) for line in piPet.PI_DAY_CLOUDS[0]}), 1)
 
-    def test_birthday_party_hat_replaces_the_leaf(self):
-        lines = piPet.build_pet('content', 1, 'birthday')
-        self.assertEqual(lines[0], (piPet.PARTY_HAT, 'sun'))
-        self.assertEqual(piPet.build_pet('content', 1)[0][0], '    \\\\|//    ')
+    def test_holiday_hats_replace_the_leaf(self):
+        cases = [('birthday', piPet.PARTY_HAT, 'sun'), ('christmas', piPet.SANTA_HAT, 'berry'),
+                 ('halloween', piPet.PUMPKIN_HAT, 'pumpkin')]
+        for holiday, hat, color in cases:
+            with self.subTest(holiday=holiday):
+                self.assertEqual(piPet.build_pet('content', 1, holiday)[0], (hat, color))
+        self.assertEqual(piPet.PARTY_HAT, '     /*\\     ', 'the birthday party hat stays as it is')
+        for holiday in (None, 'new_year', 'pi_day'):
+            with self.subTest(holiday=holiday):
+                self.assertEqual(piPet.build_pet('content', 1, holiday)[0], ('    \\\\|//    ', 'leaf'))
 
     def test_birthday_lines_know_the_age(self):
         self.assertIn('I was born today!', piPet.holiday_sayings(make_vitals(holiday='birthday', year=2026)))

@@ -92,8 +92,8 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 
 | Holiday | When | What you'll see |
 |---|---|---|
-| Halloween | Oct 25-31 | A jack-o'-lantern `(^w^)` with a flickering candle beside the plant, and two bats `^v^` flapping across the night sky |
-| Christmas | Dec 20-26 | Lights strung along the grass, the colors chasing each other |
+| Halloween | Oct 25-31 | A pumpkin hat `((\|))`, a jack-o'-lantern `(^w^)` with a flickering candle beside the plant, and two bats `^v^` flapping across the night sky |
+| Christmas | Dec 20-26 | A red Santa hat `.--*`, and lights strung along the grass, the colors chasing each other |
 | New Year | Dec 31 and Jan 1 | Fireworks at night: a rocket goes up, bursts into `\|/ -*- /|\`, and fades to sparks |
 | Pi Day | Mar 14 | Clouds that read `(3.14159)` |
 | Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
@@ -129,7 +129,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
 - watering: `w` pours for 3 seconds and counts once per watering, the can's spout over the middle of every plant stage with drops falling between, no can without a plant or room, and the key hint in three widths
-- holidays: every date range, the new art being one column wide, the party hat and its age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
+- holidays: every date range, the new art being one column wide, the party, Santa and pumpkin hats (and the leaf on other days), the birthday age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts

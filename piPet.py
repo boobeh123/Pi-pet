@@ -72,13 +72,20 @@ HOLIDAY_SAYINGS = {
     'birthday': ['happy birthday to me!', 'is there cake?'],  # plus a line with its age
 }
 HOLIDAY_DESCRIPTIONS = {
-    'halloween': "Halloween week: a jack-o'-lantern, and bats at night",
-    'christmas': 'Christmas week: lights strung along the grass',
+    'halloween': "Halloween week: a pumpkin hat, a jack-o'-lantern, and bats at night",
+    'christmas': 'Christmas week: a Santa hat, and lights strung along the grass',
     'new_year': 'New Year: fireworks at night',
     'pi_day': 'Pi Day (3/14): the clouds know their digits',
     'birthday': "Pi Pet's birthday (born Oct 8, 2026): a party hat",
 }
 PARTY_HAT = '     /*\\     '  # replaces the leaf on Pi Pet's birthday
+SANTA_HAT = '     .--*    '  # ...at Christmas
+PUMPKIN_HAT = '    ((|))    '  # ...and at Halloween
+HOLIDAY_HATS = {
+    'birthday': (PARTY_HAT, 'sun'),
+    'christmas': (SANTA_HAT, 'berry'),
+    'halloween': (PUMPKIN_HAT, 'pumpkin'),
+}
 PUMPKIN = [' _)_ ', '(^w^)']  # a jack-o'-lantern: stem, then the carved face
 PUMPKIN_OFFSET = 31  # columns from the pet's left edge, just past the plant
 BAT_FRAMES = ['^v^', '-v-']  # wings up, wings level
@@ -513,7 +520,7 @@ def pick_face(mood, tick):
 
 
 def build_pet(mood, tick, holiday=None):
-    """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra (and sun for the party hat)."""
+    """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra (or a holiday hat's color)."""
     left_eye, right_eye, mouth = pick_face(mood, tick)
 
     # Busy pet bounces up and down, happy pet hops for joy; surfing pet sways left and right
@@ -545,8 +552,8 @@ def build_pet(mood, tick, holiday=None):
         lines[3] = (f' | (: {mouth} :) | ', 'berry')
     if mood == 'surfing':
         lines.append(('~^~^~^~^~^~^~', 'extra'))
-    if holiday == 'birthday':
-        lines[0] = (PARTY_HAT, 'sun')
+    if holiday in HOLIDAY_HATS:
+        lines[0] = HOLIDAY_HATS[holiday]  # the hat sits where the leaf was
 
     lines = [(sway + text, color) for text, color in lines]
     if bounce:
