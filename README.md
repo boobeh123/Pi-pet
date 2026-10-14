@@ -94,7 +94,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 |---|---|---|
 | Halloween | Oct 25-31 | A pumpkin hat `((\|))`, a jack-o'-lantern `(^w^)` with a flickering candle beside the plant, and two bats `^v^` flapping across the night sky |
 | Christmas | Dec 20-26 | A red Santa hat `.--*`, and lights strung along the grass, the colors chasing each other |
-| New Year | Dec 31 and Jan 1 | Fireworks at night: a rocket goes up, bursts into `\|/ -*- /|\`, and fades to sparks |
+| New Year | Dec 31 and Jan 1 | Fireworks at night: a rocket goes up, bursts into `\\|/ -*- /\|\`, and fades to sparks |
 | Pi Day | Mar 14 | Clouds that read `(3.14159)` |
 | Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
 
