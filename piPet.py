@@ -9,6 +9,7 @@
 """
 
 import argparse
+import collections
 import curses
 import datetime
 import glob
@@ -131,6 +132,13 @@ WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
+HISTORY_SAMPLES = 300  # readings kept for the trend sparklines: 10 minutes at one every 2 seconds
+MIN_TREND_SAMPLES = 4  # fewer than this (a --once snapshot, say) and there's no trend to draw
+TEMP_TREND_RANGE = (40, 80)  # °C from the bottom to the top of the temperature sparkline
+TREND_WIDTH = 20  # characters per sparkline, two time slices each
+# Braille dots from the bottom up, for the left and right halves of a character
+LEFT_DOTS = (0x40, 0x04, 0x02, 0x01)
+RIGHT_DOTS = (0x80, 0x20, 0x10, 0x08)
 CLOCK_TICKS_PER_SECOND = os.sysconf('SC_CLK_TCK')  # the unit of CPU time in /proc/<pid>/stat (100 on Linux)
 BUSY_SAYING = '{} is keeping me busy!'
 BUSY_SAYING_CHANCE = 1 / 2
@@ -490,6 +498,8 @@ class Vitals:
         self.process_ticks = None  # the last read_process_ticks, for working out the busiest program
         self.process_time = None
         self.busiest = None  # (name, percent of one core), once there are two readings to compare
+        self.temp_history = collections.deque(maxlen=HISTORY_SAMPLES)  # for the trend sparklines
+        self.load_history = collections.deque(maxlen=HISTORY_SAMPLES)
         self.refresh()
 
     def refresh(self):
@@ -518,6 +528,9 @@ class Vitals:
         self.holiday = holiday_on(now.month, now.day)
         self.update_net_rate()
         self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
+        if self.temp_c is not None:
+            self.temp_history.append(self.temp_c)
+        self.load_history.append(self.load)
 
     def update_busiest(self):
         """Read every process's CPU time, and work out the busiest program since the last reading at least
@@ -678,6 +691,50 @@ def build_status(vitals):
     signal = format_wifi_bars(vitals.wifi_dbm)
     network = ' '.join(part for part in (vitals.interface, signal, format_rate(vitals.net_rate)) if part)
     return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {network}'
+
+
+def sparkline(values, width, low, high, slots=None):
+    """A Braille sparkline `width` characters wide, newest on the right. Each character holds two time
+    slots; the full width covers `slots` readings (all of them by default), so a short history leaves
+    the left side blank. Every slot with data shows at least one dot; low and high set the scale."""
+    values = list(values)
+    dots = width * 2
+    per_dot = max(slots or len(values), dots) / dots  # readings per dot (at least one)
+    heights = []
+    for dot in range(dots):
+        start = len(values) - round((dots - dot) * per_dot)
+        end = len(values) - round((dots - 1 - dot) * per_dot)
+        bucket = values[max(0, start):max(0, end)]
+        if bucket:
+            level = (sum(bucket) / len(bucket) - low) / (high - low)
+            heights.append(1 + round(min(1, max(0, level)) * 3))
+        else:
+            heights.append(0)
+    return ''.join(chr(0x2800 + sum(LEFT_DOTS[:left]) + sum(RIGHT_DOTS[:right]))
+                   for left, right in zip(heights[::2], heights[1::2]))
+
+
+def build_trend(vitals, width):
+    """The trend row under the status line: 10-minute sparklines of temperature and load, as
+    (col, text, color) pieces for a window `width` wide, or [] without enough history or room."""
+    if len(vitals.load_history) < MIN_TREND_SAMPLES:
+        return []
+    spark_width = min(TREND_WIDTH, (width - 22) // 2)
+    if spark_width < 6:
+        return []
+    cores = os.cpu_count() or 4
+    pieces = []
+    if len(vitals.temp_history) >= MIN_TREND_SAMPLES:
+        temp = sparkline(vitals.temp_history, spark_width, *TEMP_TREND_RANGE, slots=HISTORY_SAMPLES)
+        pieces += [('temp ', 'dim'), (temp, 'sun'), ('  ', 'dim')]
+    load = sparkline(vitals.load_history, spark_width, 0, cores, slots=HISTORY_SAMPLES)
+    pieces += [('load ', 'dim'), (load, 'extra'), ('  10 min', 'dim')]
+    col = (width - 1 - sum(len(text) for text, _ in pieces)) // 2
+    placed = []
+    for text, color in pieces:
+        placed.append((col, text, color))
+        col += len(text)
+    return placed
 
 
 def build_short_status(vitals):
@@ -1216,6 +1273,12 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
 
     # The scene only shows when everything else fits too (plus a hop row above the pet and the ground under it)
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
+    # The trend row (sparklines under the status line) comes last: it shows only if it fits with all of that
+    trend = build_trend(vitals, width)
+    if trend and block_height + 1 + (SKY_HEIGHT + 2 if show_scene else 0) <= usable:
+        block_height += 1
+    else:
+        trend = []
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
         sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year,
@@ -1287,6 +1350,10 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         status_row += 1
     add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
     last_row = status_row
+    if trend:
+        last_row += 1
+        for col, text, color in trend:
+            add(last_row, col, text, color)
     if alerts:
         last_row += 1
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')

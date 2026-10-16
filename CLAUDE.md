@@ -11,7 +11,7 @@ python3 piPet.py                       # live view (p to pet, w to water, ? for 
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
-python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~10 s)
+python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~11 s)
 python3 -m unittest discover -s tests -p "*Test.py" -k SceneTest   # one class
 python3 -m unittest discover -s tests -p "*Test.py" -k test_status_line_always_shows   # one test
 ```
@@ -39,7 +39,8 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
 - **Builders** (`build_pet`, `build_extras`, `build_pals`, `build_plant`, `build_sky`, `build_bubble`, `build_status`, `build_alerts`) return text, or cells *relative to the pet's top-left corner*. They never know the window size, except `build_sky` and `build_ground`, which span the full width.
 - **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `curses_colors()` and `ANSI_COLORS`; a test checks the ANSI side.
   - **`show_help=True`** replaces the whole scene with the help page from `build_help()` (labels plus `explain_mood`, `describe_sky`, `describe_pals`, `describe_plant`, wrapped with `textwrap`). New scene features should get a line there too.
-  - **When space runs out, things drop in this order:** scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
+  - **The trend row** (`build_trend`: Braille sparklines of `vitals.temp_history`/`load_history`) sits under the status line and is the first thing to go: it shows only when it fits along with everything else, scene included. Braille (U+2800-28FF) is East Asian width `N`, so it passes the one-column rule; block elements like `▁█` are `A` and don't.
+  - **When space runs out, things drop in this order:** trend row, scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
     - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude.

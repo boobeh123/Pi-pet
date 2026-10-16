@@ -7,9 +7,9 @@ import datetime
 import io
 import json
 import os
-import tempfile
 import random
 import sys
+import tempfile
 import unicodedata
 import unittest
 from pathlib import Path
@@ -27,7 +27,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
-                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None):
+                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
+                load_history=()):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -54,6 +55,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.now = now
     vitals.wifi_dbm = wifi_dbm
     vitals.busiest = busiest
+    vitals.temp_history = list(temp_history)
+    vitals.load_history = list(load_history)
     return vitals
 
 
@@ -146,7 +149,8 @@ class LayoutTest(unittest.TestCase):
     def all_layouts(self, sizes=SIZES):
         # With both pals and the plant in flower (its tallest), wherever there's room
         vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY,
-                             wifi_dbm=-60)  # the longest status line, with signal bars
+                             wifi_dbm=-60,  # the longest status line, with signal bars
+                             temp_history=[55.0] * 300, load_history=[1.0] * 300)  # and the trend row
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -288,7 +292,8 @@ class SceneTest(unittest.TestCase):
                                                          day_of_year=tick * 15,
                                                          adguard_running=tick % 2 == 0,  # guard awake or asleep
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
-                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]),
+                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)],
+                                                         load_history=[1.0] * (300 if tick % 2 else 0)),
                                              watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -927,6 +932,55 @@ class BusiestTest(unittest.TestCase):
         help_lines = {label: text for label, text, _ in piPet.build_help(busy, 'busy')}
         self.assertEqual(help_lines['Busiest'], f'Firefox, 85% of one core (of {os.cpu_count()})')
         self.assertNotIn('Busiest', {label for label, _, _ in piPet.build_help(make_vitals(), 'content')})
+
+
+class TrendTest(unittest.TestCase):
+    def test_sparkline_heights(self):
+        self.assertEqual(piPet.sparkline([40] * 8, 4, 40, 80), '⣀⣀⣀⣀', 'lowest values still show a dot')
+        self.assertEqual(piPet.sparkline([80] * 8, 4, 40, 80), '⣿⣿⣿⣿')
+        self.assertEqual(piPet.sparkline([90, 20], 1, 40, 80), '⣇', 'out-of-range values are clamped (4 dots, then 1)')
+
+    def test_short_history_sits_on_the_right(self):
+        line = piPet.sparkline([60] * 4, 10, 40, 80, slots=300)
+        self.assertEqual(len(line), 10)
+        self.assertEqual(line[:-1], chr(0x2800) * 9, 'blank Braille where there is no history yet')
+        self.assertNotEqual(line[-1], chr(0x2800))
+
+    def test_a_full_history_fills_the_line(self):
+        line = piPet.sparkline([60] * 300, 20, 40, 80, slots=300)
+        self.assertNotIn(chr(0x2800), line)
+
+    def test_sparklines_are_one_column(self):
+        for char in piPet.sparkline(list(range(40, 81)), 20, 40, 80) + chr(0x2800):
+            self.assertTrue(is_one_column(char), f'{char!r} {unicodedata.east_asian_width(char)}')
+
+    def test_trend_needs_history_and_room(self):
+        self.assertEqual(piPet.build_trend(make_vitals(load_history=[1.0] * 3), 80), [], 'a --once snapshot has 2 readings')
+        self.assertEqual(piPet.build_trend(make_vitals(load_history=[1.0] * 50), 30), [], 'too narrow')
+        pieces = piPet.build_trend(make_vitals(temp_history=[55.0] * 50, load_history=[1.0] * 50), 80)
+        texts = [text for _, text, _ in pieces]
+        self.assertEqual(texts[0], 'temp ')
+        self.assertIn('load ', texts)
+        self.assertEqual(texts[-1], '  10 min')
+        for (col, text, _), (next_col, _, _) in zip(pieces, pieces[1:]):
+            self.assertEqual(col + len(text), next_col, 'the pieces sit side by side')
+        only_load = piPet.build_trend(make_vitals(load_history=[1.0] * 50), 80)
+        self.assertNotIn('temp ', [text for _, text, _ in only_load], 'no temperature sensor, no temperature line')
+
+    def test_trend_row_sits_under_the_status_line(self):
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(temp_history=[55.0] * 50, load_history=[1.0] * 50))
+        status_row = next(row for row, _, text, _ in cells if text.startswith('temp ') and '·' in text)
+        trend_rows = {row for row, _, text, _ in cells if text == '  10 min'}
+        self.assertEqual(trend_rows, {status_row + 1})
+
+    def test_the_scene_wins_over_the_trend_in_a_tight_window(self):
+        history = dict(temp_history=[55.0] * 50, load_history=[1.0] * 50)
+        def shows(height):
+            cells = piPet.layout(height, 80, 'content', 1, 'hi', make_vitals(**history))
+            return (any(color == 'grass' for *_, color in cells), any(text == '  10 min' for *_, text, _ in cells))
+        tight = next(height for height in range(12, 30) if shows(height)[0])
+        self.assertEqual(shows(tight), (True, False), 'the first height with a scene has no room for the trend')
+        self.assertEqual(shows(tight + 1), (True, True))
 
 
 class WifiTest(unittest.TestCase):
