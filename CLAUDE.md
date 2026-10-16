@@ -24,7 +24,7 @@ Add `-B` to keep `__pycache__` out of the tree.
 script -q -c "stty cols 80 rows 24; TERM=xterm-256color timeout --foreground 2 python3 -B piPet.py --mood sleepy; echo EXIT=\$?" /dev/null < /dev/null
 ```
 
-**The live view writes the owner's memories file** (`~/.local/state/pi-pet/memories.json`: visits, pettings, shooting stars). For live checks, point it at a scratch folder with `XDG_STATE_HOME=<scratch dir>` inside the `script -c "..."` command, so test runs don't add fake visits. `--once` never touches it.
+**The live view writes the owner's memories file** (`~/.local/state/pi-pet/memories.json`: visits, pettings, shooting stars). For live checks, point it at a scratch folder with `XDG_STATE_HOME=<scratch dir>` inside the `script -c "..."` command, so test runs don't add fake visits. `--once` only reads it (for how grown-up the pet looks); its test patches `memories_path` so it never depends on the real file.
 
 `EXIT=124` means it ran until the timeout. Look for `Traceback` in the output. To send keys, pipe them in: `(sleep 1.5; printf p; sleep 4; printf q) | script ...`.
 
@@ -55,9 +55,10 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - `step(tick, now)` refreshes the sensors every 2 s, picks a new saying every ~10 s or on a mood change (never at tick 0, so the opening line survives), runs the petting timer (`petted_until`) and Claude's arrival greeting, and returns the mood to show.
   - `notice(cells, now)` looks at each drawn frame: a shooting star appearing starts a `WISH_SECONDS` "make a wish!" (`wish_until`), which petting blocks and the saying rotation waits for.
   - Memories: `LiveState(memories=..., wall_time=...)` opens with "missed you!" after `MISSED_YOU_SECONDS` away, and `remember(key)` counts pettings (once per petting) and shooting stars into `memories` and `unsaved`. It never touches files: `run_live` loads them with `load_memories`, and saves with `update_memories`, which re-reads the file and adds only the new counts, so two Pi Pets running at once don't overwrite each other. `save_memories` writes a temp file and `os.replace`s it.
+  - Growing up: `growth_stage(days_together(memories, vitals.now.date()))` picks the look (`GROWTH_STAGES`), which `layout()` passes to `build_pet(..., growth)`. `LiveState` opens with "look, I grew!" when the stage is above `memories['growth_seen']`, and `run_live` saves the new stage.
   - `run_live` is only the curses loop around it, with the colors from `curses_colors()`.
   - Animation speed comes from tick arithmetic in the builders, e.g. `tick // 2`.
-- **Holidays** come from `holiday_on(month, day)` into `vitals.holiday` (and `vitals.year` for the birthday age). They reach the drawing through parameters: `build_pet(..., holiday)` (the `HOLIDAY_HATS` take the leaf's place: party hat, Santa hat, pumpkin hat), `build_sky(..., holiday)` (bats, fireworks, Pi Day clouds), `build_ground(width, holiday, tick)` (Christmas lights, returned as `(col, text, color)` pieces that never overlap) and the pumpkin in `layout()`. `holiday_sayings()` feeds `pick_saying()`, and `HOLIDAY_DESCRIPTIONS` feeds the help page. A new holiday needs an entry in both dicts (a test checks).
+- **Holidays** come from `holiday_on(month, day, year)` (the year is for Thanksgiving's fourth Thursday) into `vitals.holiday` (and `vitals.year` for the birthday age). They reach the drawing through parameters: `build_pet(..., holiday)` (the `HOLIDAY_HATS` take the leaf's place: party hat, Santa hat, pumpkin hat), `build_sky(..., holiday)` (bats, fireworks in `FIREWORK_HOLIDAY_COLORS`, Valentine's hearts, Pi Day clouds, and the St. Patrick's Day rainbow), `build_ground(width, holiday, tick)` (Christmas lights, returned as `(col, text, color)` pieces that never overlap) and the pumpkin in `layout()`. `holiday_sayings()` feeds `pick_saying()`, and `HOLIDAY_DESCRIPTIONS` feeds the help page. A new holiday needs an entry in both dicts (a test checks).
 - **`pick_saying()`**: calm moods (`CHATTY_MOODS`) sometimes use a friend line (`CLAUDE_SAYINGS`, `GUARD_SAYINGS`, `PLANT_SAYINGS`) instead of their own `SAYINGS`.
 
 ## Rules the tests enforce

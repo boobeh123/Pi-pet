@@ -51,6 +51,8 @@ MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycl
 MOON_PHASE_NAMES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibbous', 'full moon',
                     'waning gibbous', 'last quarter', 'waning crescent']
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
+RAINBOW_SECONDS = 10 * 60  # how long a rainbow stays after a hot spell ends
+RAINBOW_BANDS = [('.-~~~~~~~~~~-.', 'berry'), ('.-~~~~~~~~-.', 'sun'), ('.-~~~~~~-.', 'guard')]  # top row first
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
 CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 PLANET = '-()-'  # a ringed planet: decorative, not a real planet's position
@@ -71,6 +73,10 @@ HOLIDAY_SAYINGS = {
     'new_year': ['happy new year!', '3... 2... 1...!', 'ooh, fireworks!'],
     'pi_day': ['happy Pi Day!', '3.14159265...', 'I am the Pi'],
     'birthday': ['happy birthday to me!', 'is there cake?'],  # plus a line with its age
+    'valentines': ['be my valentine?', 'sending you hugs', 'I heart you'],
+    'st_patricks': ['feeling lucky!', 'where did I put my pot of gold?', 'top of the morning!'],
+    'fourth_of_july': ['happy Fourth!', 'red, white and boom!', 'ooh, fireworks!'],
+    'thanksgiving': ['thankful for you!', 'pass the pie!', 'gobble gobble'],
 }
 HOLIDAY_DESCRIPTIONS = {
     'halloween': "Halloween week: a pumpkin hat, a jack-o'-lantern, and bats at night",
@@ -78,14 +84,24 @@ HOLIDAY_DESCRIPTIONS = {
     'new_year': 'New Year: fireworks at night',
     'pi_day': 'Pi Day (3/14): the clouds know their digits',
     'birthday': "Pi Pet's birthday (born Oct 8, 2026): a party hat",
+    'valentines': "Valentine's Day: a heart on its head, and hearts in the sky",
+    'st_patricks': "St. Patrick's Day: a green top hat",
+    'fourth_of_july': 'Fourth of July: red, white and blue fireworks at night',
+    'thanksgiving': 'Thanksgiving: a pilgrim hat',
 }
 PARTY_HAT = '     /*\\     '  # replaces the leaf on Pi Pet's birthday
 SANTA_HAT = '     .--*    '  # ...at Christmas
-PUMPKIN_HAT = '    ((|))    '  # ...and at Halloween
+PUMPKIN_HAT = '    ((|))    '  # ...at Halloween
+HEART_HAT = '     <3      '  # ...on Valentine's Day
+TOP_HAT = '    _[_]_    '  # ...on St. Patrick's Day
+PILGRIM_HAT = '    _|=|_    '  # ...and at Thanksgiving
 HOLIDAY_HATS = {
     'birthday': (PARTY_HAT, 'sun'),
     'christmas': (SANTA_HAT, 'berry'),
     'halloween': (PUMPKIN_HAT, 'pumpkin'),
+    'valentines': (HEART_HAT, 'berry'),
+    'st_patricks': (TOP_HAT, 'leaf'),
+    'thanksgiving': (PILGRIM_HAT, 'plain'),
 }
 PUMPKIN = [' _)_ ', '(^w^)']  # a jack-o'-lantern: stem, then the carved face
 PUMPKIN_OFFSET = 31  # columns from the pet's left edge, just past the plant
@@ -98,6 +114,7 @@ LIGHT_SPACING = 4
 FIREWORK_WINDOW = FPS * 3  # every 3 seconds of New Year's night has a good chance of a firework
 FIREWORK_CHANCE = 2 / 3
 FIREWORK_COLORS = ['berry', 'sun', 'extra', 'planet', 'leaf']
+FIREWORK_HOLIDAY_COLORS = {'new_year': FIREWORK_COLORS, 'fourth_of_july': ['berry', 'plain', 'guard']}  # red, white, blue
 FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one list per tick
     [(2, 0, "'")],  # the rocket goes up
     [(1, 0, '*')],
@@ -107,7 +124,11 @@ FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one l
 
 # Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
 DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'times_watered': 0, 'shooting_stars_seen': 0,
-                    'last_seen': None}
+                    'last_seen': None, 'growth_seen': 0}
+# The pet grows up as your days together add up: (days together, name)
+GROWTH_STAGES = [(0, 'little'), (7, 'leafy'), (30, 'plump'), (100, 'golden')]
+BUSHY_LEAF = '   \\\\\\|///   '  # leafy and up
+GREW_SAYING = 'look, I grew!'
 MISSED_YOU_SECONDS = 86400  # away this long or more, and the pet says...
 MISSED_YOU_SAYING = 'missed you!'
 
@@ -132,6 +153,8 @@ WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
+FAN_FRAMES = '|/-\\'  # the status line's fan icon, a quarter turn apart
+FAN_FULL_SPEED_RPM = 6000  # at this speed or faster the icon turns one step every frame (the most 4 FPS can show)
 HISTORY_SAMPLES = 300  # readings kept for the trend sparklines: 10 minutes at one every 2 seconds
 MIN_TREND_SAMPLES = 4  # fewer than this (a --once snapshot, say) and there's no trend to draw
 TEMP_TREND_RANGE = (40, 80)  # °C from the bottom to the top of the temperature sparkline
@@ -378,11 +401,40 @@ def read_uptime_sec():
         return None
 
 
-def holiday_on(month, day):
-    """Which holiday a date falls on, or None: Halloween week, Christmas week, New Year (Dec 31 and Jan 1),
-    Pi Day (Mar 14), and Pi Pet's own birthday (Oct 8)."""
+def thanksgiving_day(year):
+    """The day of November that Thanksgiving (the fourth Thursday) falls on."""
+    first_thursday = 1 + (3 - datetime.date(year, 11, 1).weekday()) % 7  # Monday is 0, Thursday 3
+    return first_thursday + 21
+
+
+def days_together(memories, today):
+    """Whole days since Pi Pet first met you, or None if it doesn't remember meeting you."""
+    if not memories or not memories.get('first_met'):
+        return None
+    return (today - datetime.date.fromisoformat(memories['first_met'])).days
+
+
+def growth_stage(days):
+    """How grown-up the pet looks: 0 little, 1 leafy (7 days together), 2 plump (30), 3 golden (100)."""
+    if days is None:
+        return 0
+    return max((i for i, (min_days, _) in enumerate(GROWTH_STAGES) if days >= min_days), default=0)
+
+
+def holiday_on(month, day, year):
+    """Which holiday a date falls on, or None: Valentine's Day, Pi Day (Mar 14), St. Patrick's Day,
+    the Fourth of July, Pi Pet's own birthday (Oct 8), Halloween week, Thanksgiving, Christmas week,
+    and New Year (Dec 31 and Jan 1)."""
+    if (month, day) == (2, 14):
+        return 'valentines'
     if (month, day) == (3, 14):
         return 'pi_day'
+    if (month, day) == (3, 17):
+        return 'st_patricks'
+    if (month, day) == (7, 4):
+        return 'fourth_of_july'
+    if (month, day) == (11, thanksgiving_day(year)):
+        return 'thanksgiving'
     if (month, day) == PI_PET_BIRTHDAY:
         return 'birthday'
     if month == 10 and 25 <= day <= 31:
@@ -498,6 +550,9 @@ class Vitals:
         self.process_ticks = None  # the last read_process_ticks, for working out the busiest program
         self.process_time = None
         self.busiest = None  # (name, percent of one core), once there are two readings to compare
+        self.was_hot = False  # for the rainbow after a hot spell
+        self.cooled_at = None
+        self.rainbow = False
         self.temp_history = collections.deque(maxlen=HISTORY_SAMPLES)  # for the trend sparklines
         self.load_history = collections.deque(maxlen=HISTORY_SAMPLES)
         self.refresh()
@@ -525,12 +580,23 @@ class Vitals:
         self.moon_age = moon_age_days(time.time())
         self.day_of_year = now.timetuple().tm_yday  # moves the planet a little each night
         self.year = now.year
-        self.holiday = holiday_on(now.month, now.day)
+        self.holiday = holiday_on(now.month, now.day, now.year)
         self.update_net_rate()
         self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
+        self.update_rainbow()
         if self.temp_c is not None:
             self.temp_history.append(self.temp_c)
         self.load_history.append(self.load)
+
+    def update_rainbow(self, now=None):
+        """A rainbow shows for RAINBOW_SECONDS after a hot spell ends (but not if it gets hot again).
+        `now` is time.monotonic(), unless a test passes its own."""
+        now = time.monotonic() if now is None else now
+        hot = self.temp_c is not None and self.temp_c >= HOT_TEMP_C
+        if self.was_hot and not hot:
+            self.cooled_at = now
+        self.was_hot = hot
+        self.rainbow = not hot and self.cooled_at is not None and now - self.cooled_at < RAINBOW_SECONDS
 
     def update_busiest(self):
         """Read every process's CPU time, and work out the busiest program since the last reading at least
@@ -633,7 +699,7 @@ def pick_face(mood, tick):
     return frames[0]
 
 
-def build_pet(mood, tick, holiday=None):
+def build_pet(mood, tick, holiday=None, growth=0):
     """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra (or a holiday hat's color)."""
     left_eye, right_eye, mouth = pick_face(mood, tick)
 
@@ -649,6 +715,12 @@ def build_pet(mood, tick, holiday=None):
         ('  \\ :   : /  ', 'berry'),
         ("   '-...-'   ", 'berry'),
     ]
+
+    # Growing up: a bushier leaf at 7 days together, more seeds at 30, golden leaves at 100
+    if growth >= 1:
+        lines[0] = (BUSHY_LEAF, 'sun' if growth >= 3 else 'leaf')
+    if growth >= 2:
+        lines[4] = ('  \\ : . : /  ', 'berry')
 
     # Little legs that run when busy
     if mood == 'busy':
@@ -685,9 +757,20 @@ def build_bubble(text):
     ]
 
 
-def build_status(vitals):
+def fan_icon(rpm, tick):
+    """The status line's little fan, turning faster the faster the real fan spins: '' without a fan
+    reading, a still '-' when it's stopped."""
+    if rpm is None:
+        return ''
+    if rpm <= 0:
+        return '-'
+    steps_per_tick = min(1.0, rpm / FAN_FULL_SPEED_RPM)  # more than one step a frame would look like it's slowing
+    return FAN_FRAMES[int(tick * steps_per_tick) % len(FAN_FRAMES)]
+
+
+def build_status(vitals, tick=0):
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
-    fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)} rpm'
+    fan = '--' if vitals.fan_rpm is None else f'{fan_icon(vitals.fan_rpm, tick)} {int(vitals.fan_rpm)} rpm'
     signal = format_wifi_bars(vitals.wifi_dbm)
     network = ' '.join(part for part in (vitals.interface, signal, format_rate(vitals.net_rate)) if part)
     return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {network}'
@@ -737,10 +820,10 @@ def build_trend(vitals, width):
     return placed
 
 
-def build_short_status(vitals):
+def build_short_status(vitals, tick=0):
     """A narrower status line for small windows."""
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
-    fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)}'
+    fan = '--' if vitals.fan_rpm is None else f'{fan_icon(vitals.fan_rpm, tick)} {int(vitals.fan_rpm)}'
     return f'{temp}  load {vitals.load:.2f}  fan {fan}  {format_rate(vitals.net_rate)}'
 
 
@@ -936,8 +1019,8 @@ def build_bats(width, tick):
     return cells
 
 
-def build_fireworks(width, tick, seed):
-    """A New Year's firework as (row, col, text, color) cells: a rocket, a burst, fading sparks.
+def build_fireworks(width, tick, seed, colors=FIREWORK_COLORS):
+    """A holiday firework as (row, col, text, color) cells: a rocket, a burst, fading sparks.
 
     Like shooting stars, each FIREWORK_WINDOW has a FIREWORK_CHANCE of one, decided from the seed.
     """
@@ -950,15 +1033,23 @@ def build_fireworks(width, tick, seed):
     if not 0 <= step < len(FIREWORK_FRAMES):
         return []
     center = rng.randrange(1, width - 2)  # room for the burst's arms on both sides
-    color = rng.choice(FIREWORK_COLORS)
+    color = rng.choice(colors)
     return [(row, center + offset, text, color) for row, offset, text in FIREWORK_FRAMES[step]]
 
 
-def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None):
+def heart_spots(width):
+    """Where Valentine's Day hearts float in the sky: the same spots for the same window width."""
+    rng = random.Random(f'hearts:{width}')
+    return [(rng.randrange(SKY_HEIGHT), rng.randrange(width - 3)) for _ in range(max(2, width // 16))]
+
+
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None,
+              rainbow=False):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
     the moon in its real phase, a ringed planet, stars and the odd shooting star by night, and a red
     sun, glowing clouds and the first (or last) stars at dusk and dawn. Holidays add bats (Halloween),
-    fireworks (New Year) and clouds made of digits (Pi Day).
+    fireworks (New Year, the Fourth of July), hearts (Valentine's Day) and clouds made of digits (Pi Day).
+    A rainbow shows by day after a hot spell (and all day on St. Patrick's Day), opposite the sun.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -980,12 +1071,31 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
         """True if nothing in the sky so far is on these spots (or within `margin` columns of them)."""
         return not any((row, near) in taken for near in range(col - margin, col + len(text) + margin))
 
+    def place_behind(row, col, text, color):
+        """Place text behind whatever's already in the sky: only the runs of it that land on free spots."""
+        run_start = None
+        for offset in range(len(text) + 1):
+            free = offset < len(text) and is_free(row, col + offset, text[offset])
+            if free and run_start is None:
+                run_start = offset
+            elif not free and run_start is not None:
+                place(row, col + run_start, text[run_start:offset], color)
+                run_start = None
+
     if daytime:
         shapes = PI_DAY_CLOUDS if holiday == 'pi_day' else CLOUD_SHAPES
         for row, col, text, _ in build_clouds(width, load, tick, shapes):
             place(row, col, text, 'sunset' if twilight else 'cloud')  # clouds glow at sunrise and sunset
         if is_free(body_row, body_col, body):  # else behind a cloud
             place(body_row, body_col, body, 'sunset' if twilight else 'sun')
+        if rainbow or holiday == 'st_patricks':
+            # Opposite the sun, like a real rainbow, and behind the clouds
+            widest = len(RAINBOW_BANDS[0][0])
+            center = width - 1 - (body_col + len(body) // 2)
+            rainbow_left = min(max(0, center - widest // 2), max(0, width - 1 - widest))
+            for row, (band, color) in enumerate(RAINBOW_BANDS):
+                col, band = clip_to_width(rainbow_left + (widest - len(band)) // 2, band, width)
+                place_behind(row, col, band, color)
         star_count = int(width // 8 * TWILIGHT_STAR_SHARE * twilight)
     else:
         if body:
@@ -1002,13 +1112,18 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
             for row, col, text in build_bats(width, tick):
                 if is_free(row, col, text):  # else behind the moon
                     place(row, col, text, 'dim')
-        if holiday == 'new_year':
-            burst = build_fireworks(width, tick, seed)
+        if holiday in FIREWORK_HOLIDAY_COLORS:
+            burst = build_fireworks(width, tick, seed, FIREWORK_HOLIDAY_COLORS[holiday])
             if all(is_free(row, col, text) for row, col, text, _ in burst):
                 for row, col, text, color in burst:
                     place(row, col, text, color)
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
+
+    if holiday == 'valentines':
+        for row, col in heart_spots(width):
+            if is_free(row, col, '<3', margin=1):  # else behind a cloud, the sun, the moon or another heart
+                place(row, col, '<3', 'berry')
 
     for i, (row, col) in enumerate(star_spots(width, star_count)):
         if not is_free(row, col, '.', margin=1):
@@ -1133,6 +1248,10 @@ def describe_sky(vitals):
             return f'dusk: a red sun, the first stars, {weather}'
         if hour < 7:
             return f'dawn: a red sun, the last stars, {weather}'
+        if vitals.rainbow:
+            return f'day: the sun, {weather}, and a rainbow because the CPU just cooled down after a hot spell'
+        if vitals.holiday == 'st_patricks':
+            return f"day: the sun, {weather}, and a rainbow for St. Patrick's Day"
         return f'day: the sun, {weather}'
     phase = MOON_PHASE_NAMES[moon_eighth(vitals.moon_age)]
     return f'night: {phase} (day {vitals.moon_age:.1f} of 29.5), a ringed planet, the odd shooting star'
@@ -1195,6 +1314,17 @@ def describe_memories(memories, today):
     return '  ·  '.join(parts)
 
 
+def describe_growth(memories, today):
+    """How grown-up the pet is, and when it next changes."""
+    days = days_together(memories, today)
+    stage = growth_stage(days)
+    together = f'{max(0, days or 0)} day{"" if days == 1 else "s"} together'
+    if stage + 1 < len(GROWTH_STAGES):
+        next_days, next_name = GROWTH_STAGES[stage + 1]
+        return f'{GROWTH_STAGES[stage][1]} ({together}; {next_name} at {next_days} days)'
+    return f'{GROWTH_STAGES[stage][1]} ({together})'
+
+
 def build_help(vitals, mood, memories=None, today=None):
     """The help screen: what everything on screen means right now, as (label, text, color) lines."""
     lines = [
@@ -1214,6 +1344,7 @@ def build_help(vitals, mood, memories=None, today=None):
         lines.append(('Today', HOLIDAY_DESCRIPTIONS[vitals.holiday], 'plain'))
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
+        lines.append(('Growing', describe_growth(memories, today or datetime.date.today()), 'plain'))
     lines.append(('Keys', 'p to pet  ·  w to water  ·  ? closes this page  ·  q to quit', 'plain'))
     return lines
 
@@ -1253,7 +1384,8 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
                 row += 1
         return cells
 
-    pet = build_pet(mood, tick, vitals.holiday)
+    growth = growth_stage(days_together(memories, vitals.now.date()))
+    pet = build_pet(mood, tick, vitals.holiday, growth)
     bounced = pet[0][0] == ''
     if bounced:
         pet = pet[1:]  # lay out the resting pet, then move it a row, so the bounce moves the pet and not the bubble
@@ -1282,7 +1414,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
         sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year,
-                        vitals.holiday)
+                        vitals.holiday, vitals.rainbow)
         for row, col, text, color in sky:
             add(row, col, text, color)
     else:
@@ -1340,9 +1472,9 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
 
-    status = build_status(vitals)
+    status = build_status(vitals, tick)
     if len(status) > width - 1:
-        status = build_short_status(vitals)
+        status = build_short_status(vitals, tick)
     status_row = pet_top + pet_height + 1
     if show_scene:
         for col, text, color in build_ground(width, vitals.holiday, tick):
@@ -1467,7 +1599,8 @@ def print_once(forced_mood=None, interface=None):
 
     columns, rows = shutil.get_terminal_size()  # 80x24 when the output is piped
     width, height = min(columns, ONCE_MAX_WIDTH), min(rows, ONCE_MAX_HEIGHT)
-    cells = layout(height, width, mood, 1, pick_saying(mood, vitals), vitals, show_hint=False)
+    memories = load_memories(memories_path())  # read only, so the snapshot shows how grown-up the pet is
+    cells = layout(height, width, mood, 1, pick_saying(mood, vitals), vitals, show_hint=False, memories=memories)
     use_color = sys.stdout.isatty() and 'NO_COLOR' not in os.environ
     for line in render_lines(cells, height, width, use_color):
         print(line)
@@ -1492,7 +1625,7 @@ def load_memories(path):
         return memories
     if not isinstance(saved, dict):
         return memories
-    for key in ('visits', 'times_petted', 'times_watered', 'shooting_stars_seen'):
+    for key in ('visits', 'times_petted', 'times_watered', 'shooting_stars_seen', 'growth_seen'):
         value = saved.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             memories[key] = value
@@ -1520,7 +1653,7 @@ def save_memories(path, memories):
         return False
 
 
-def update_memories(path, add=None, first_met=None, last_seen=None):
+def update_memories(path, add=None, first_met=None, last_seen=None, growth_seen=None):
     """Add counts to the memories on disk and return what's saved. It re-reads the file first, so two
     Pi Pets running at once each add their own counts instead of overwriting each other's."""
     memories = load_memories(path)
@@ -1528,6 +1661,8 @@ def update_memories(path, add=None, first_met=None, last_seen=None):
         memories[key] += amount
     if first_met and not memories['first_met']:
         memories['first_met'] = first_met
+    if growth_seen is not None:
+        memories['growth_seen'] = max(memories['growth_seen'], growth_seen)
     if last_seen is not None:
         memories['last_seen'] = last_seen
     save_memories(path, memories)
@@ -1554,7 +1689,10 @@ class LiveState:
         self.memories = memories
         self.unsaved = {}  # counts added since the last save, for run_live to write with update_memories
         last_seen = memories['last_seen'] if memories else None
-        if last_seen is not None and wall_time is not None and wall_time - last_seen >= MISSED_YOU_SECONDS:
+        self.growth_stage = growth_stage(days_together(memories, vitals.now.date()))
+        if memories and self.growth_stage > memories.get('growth_seen', 0):
+            self.saying = GREW_SAYING  # the first visit since it reached a new look
+        elif last_seen is not None and wall_time is not None and wall_time - last_seen >= MISSED_YOU_SECONDS:
             self.saying = MISSED_YOU_SAYING
         elif vitals.claude_here:
             self.saying = CLAUDE_GREETING
@@ -1672,7 +1810,8 @@ def run_live(screen, forced_mood=None, interface=None):
     colors = curses_colors()
     path = memories_path()
     state = LiveState(Vitals(forced_mood, interface), memories=load_memories(path), wall_time=time.time())
-    state.memories = update_memories(path, add={'visits': 1}, first_met=datetime.date.today().isoformat())
+    state.memories = update_memories(path, add={'visits': 1}, first_met=datetime.date.today().isoformat(),
+                                     growth_seen=state.growth_stage)
     tick = 0
 
     try:
