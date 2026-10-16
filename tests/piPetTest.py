@@ -1046,7 +1046,7 @@ class FanTest(unittest.TestCase):
         vitals = make_vitals()  # 2000 rpm
         self.assertIn('fan | 2000 rpm', piPet.build_status(vitals, tick=0))
         self.assertIn('fan | 2000', piPet.build_short_status(vitals, tick=0))
-        self.assertNotIn('fan | 2000', piPet.build_status(vitals, tick=12), 'it has turned by then')
+        self.assertIn('fan / 2000 rpm', piPet.build_status(vitals, tick=3), 'a step later: 2000 rpm is a step every 3 frames')
 
 
 class ClockTest(unittest.TestCase):
