@@ -1143,6 +1143,82 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(self.clock_cells(80, show_hint=False), [], '--once has no bottom bar')
 
 
+class GrowthTest(unittest.TestCase):
+    TODAY = datetime.date(2026, 10, 15)
+
+    def met(self, days_ago, growth_seen=0):
+        first_met = (self.TODAY - datetime.timedelta(days=days_ago)).isoformat()
+        return {**piPet.DEFAULT_MEMORIES, 'first_met': first_met, 'growth_seen': growth_seen}
+
+    def test_days_together_and_stages(self):
+        self.assertIsNone(piPet.days_together(None, self.TODAY))
+        self.assertIsNone(piPet.days_together(dict(piPet.DEFAULT_MEMORIES), self.TODAY))
+        self.assertEqual(piPet.days_together(self.met(9), self.TODAY), 9)
+        cases = [(None, 0), (-3, 0), (0, 0), (6, 0), (7, 1), (29, 1), (30, 2), (99, 2), (100, 3), (1000, 3)]
+        for days, stage in cases:
+            with self.subTest(days=days):
+                self.assertEqual(piPet.growth_stage(days), stage)
+
+    def test_each_look(self):
+        leaf = lambda growth: piPet.build_pet('content', 1, None, growth)[0]
+        self.assertEqual(leaf(0), ('    \\\\|//    ', 'leaf'))
+        self.assertEqual(leaf(1), (piPet.BUSHY_LEAF, 'leaf'))
+        self.assertEqual(leaf(3), (piPet.BUSHY_LEAF, 'sun'), 'golden leaves')
+        self.assertNotIn('.', piPet.build_pet('content', 1, None, 1)[4][0], 'seeds come at 30 days')
+        self.assertIn('.', piPet.build_pet('content', 1, None, 2)[4][0])
+        for growth in range(4):
+            for mood in piPet.FACES:
+                lines = piPet.build_pet(mood, 2, None, growth)
+                widths = {len(text) for text, _ in lines if text}
+                with self.subTest(growth=growth, mood=mood):
+                    self.assertEqual(len(widths), 1)
+                    self.assertTrue(all(is_one_column(char) for text, _ in lines for char in text))
+
+    def test_hats_still_win(self):
+        self.assertEqual(piPet.build_pet('content', 1, 'christmas', 3)[0], (piPet.SANTA_HAT, 'berry'))
+
+    def test_the_scene_shows_how_grown_up_it_is(self):
+        vitals = make_vitals(now=datetime.datetime(2026, 10, 15, 20, 42))
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', vitals, memories=self.met(10))
+        self.assertIn(piPet.BUSHY_LEAF, [text for *_, text, _ in cells])
+
+    def test_look_i_grew(self):
+        def opening(memories):
+            vitals = make_vitals(now=datetime.datetime(2026, 10, 15, 20, 42))
+            vitals.refresh = lambda: None
+            return piPet.LiveState(vitals, rng=random.Random(0), memories=memories).saying
+        self.assertEqual(opening(self.met(8, growth_seen=0)), piPet.GREW_SAYING)
+        self.assertNotEqual(opening(self.met(8, growth_seen=1)), piPet.GREW_SAYING, 'only the first time')
+        self.assertNotEqual(opening(self.met(2)), piPet.GREW_SAYING)
+
+    def test_remembers_the_look_it_showed_off(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'memories.json')
+            piPet.update_memories(path, growth_seen=2)
+            self.assertEqual(piPet.update_memories(path, growth_seen=1)['growth_seen'], 2, 'never goes backwards')
+
+    def test_help_says_how_it_is_growing(self):
+        self.assertEqual(piPet.describe_growth(self.met(2), self.TODAY), 'little (2 days together; leafy at 7 days)')
+        self.assertEqual(piPet.describe_growth(self.met(1), self.TODAY), 'little (1 day together; leafy at 7 days)')
+        self.assertEqual(piPet.describe_growth(self.met(150), self.TODAY), 'golden (150 days together)')
+
+    def test_once_reads_the_memories_without_writing_them(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'memories.json')
+            memories = {**self.met(40), 'first_met': (datetime.date.today() - datetime.timedelta(days=40)).isoformat()}
+            piPet.save_memories(path, memories)
+            before = open(path).read()
+            vitals = make_vitals(now=datetime.datetime.now())
+            vitals.refresh = lambda: None
+            with mock.patch.object(piPet, 'Vitals', return_value=vitals), mock.patch.object(piPet.time, 'sleep'), \
+                    mock.patch.object(piPet.shutil, 'get_terminal_size', return_value=os.terminal_size((80, 24))), \
+                    mock.patch.object(piPet, 'memories_path', return_value=path), \
+                    mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout:
+                piPet.print_once()
+            self.assertIn(piPet.BUSHY_LEAF.strip(), stdout.getvalue())
+            self.assertEqual(open(path).read(), before, '--once never writes the memories')
+
+
 class WaterTest(unittest.TestCase):
     def make_state(self, **readings):
         vitals = make_vitals(**readings)
@@ -1241,6 +1317,7 @@ class OnceTest(unittest.TestCase):
         with mock.patch.object(piPet, 'Vitals', return_value=vitals), \
                 mock.patch.object(piPet.time, 'sleep'), \
                 mock.patch.object(piPet.shutil, 'get_terminal_size', return_value=os.terminal_size((80, 24))), \
+                mock.patch.object(piPet, 'memories_path', return_value='/nonexistent/memories.json'), \
                 mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout:
             piPet.print_once()
         output = stdout.getvalue()
@@ -1531,7 +1608,7 @@ class MemoriesTest(unittest.TestCase):
 
     def test_save_and_load(self):
         memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'times_watered': 2, 'shooting_stars_seen': 1,
-                    'last_seen': 123.5}
+                    'last_seen': 123.5, 'growth_seen': 1}
         self.assertTrue(piPet.save_memories(self.path, memories))
         self.assertEqual(piPet.load_memories(self.path), memories)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), ['memories.json'], 'no temporary file left behind')

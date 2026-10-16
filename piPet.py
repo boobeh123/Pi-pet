@@ -124,7 +124,11 @@ FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one l
 
 # Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
 DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'times_watered': 0, 'shooting_stars_seen': 0,
-                    'last_seen': None}
+                    'last_seen': None, 'growth_seen': 0}
+# The pet grows up as your days together add up: (days together, name)
+GROWTH_STAGES = [(0, 'little'), (7, 'leafy'), (30, 'plump'), (100, 'golden')]
+BUSHY_LEAF = '   \\\\\\|///   '  # leafy and up
+GREW_SAYING = 'look, I grew!'
 MISSED_YOU_SECONDS = 86400  # away this long or more, and the pet says...
 MISSED_YOU_SAYING = 'missed you!'
 
@@ -401,6 +405,20 @@ def thanksgiving_day(year):
     """The day of November that Thanksgiving (the fourth Thursday) falls on."""
     first_thursday = 1 + (3 - datetime.date(year, 11, 1).weekday()) % 7  # Monday is 0, Thursday 3
     return first_thursday + 21
+
+
+def days_together(memories, today):
+    """Whole days since Pi Pet first met you, or None if it doesn't remember meeting you."""
+    if not memories or not memories.get('first_met'):
+        return None
+    return (today - datetime.date.fromisoformat(memories['first_met'])).days
+
+
+def growth_stage(days):
+    """How grown-up the pet looks: 0 little, 1 leafy (7 days together), 2 plump (30), 3 golden (100)."""
+    if days is None:
+        return 0
+    return max((i for i, (min_days, _) in enumerate(GROWTH_STAGES) if days >= min_days), default=0)
 
 
 def holiday_on(month, day, year):
@@ -681,7 +699,7 @@ def pick_face(mood, tick):
     return frames[0]
 
 
-def build_pet(mood, tick, holiday=None):
+def build_pet(mood, tick, holiday=None, growth=0):
     """Return the pet as a list of (text, color) lines. Colors: leaf, berry, extra (or a holiday hat's color)."""
     left_eye, right_eye, mouth = pick_face(mood, tick)
 
@@ -697,6 +715,12 @@ def build_pet(mood, tick, holiday=None):
         ('  \\ :   : /  ', 'berry'),
         ("   '-...-'   ", 'berry'),
     ]
+
+    # Growing up: a bushier leaf at 7 days together, more seeds at 30, golden leaves at 100
+    if growth >= 1:
+        lines[0] = (BUSHY_LEAF, 'sun' if growth >= 3 else 'leaf')
+    if growth >= 2:
+        lines[4] = ('  \\ : . : /  ', 'berry')
 
     # Little legs that run when busy
     if mood == 'busy':
@@ -1290,6 +1314,17 @@ def describe_memories(memories, today):
     return '  ·  '.join(parts)
 
 
+def describe_growth(memories, today):
+    """How grown-up the pet is, and when it next changes."""
+    days = days_together(memories, today)
+    stage = growth_stage(days)
+    together = f'{max(0, days or 0)} day{"" if days == 1 else "s"} together'
+    if stage + 1 < len(GROWTH_STAGES):
+        next_days, next_name = GROWTH_STAGES[stage + 1]
+        return f'{GROWTH_STAGES[stage][1]} ({together}; {next_name} at {next_days} days)'
+    return f'{GROWTH_STAGES[stage][1]} ({together})'
+
+
 def build_help(vitals, mood, memories=None, today=None):
     """The help screen: what everything on screen means right now, as (label, text, color) lines."""
     lines = [
@@ -1309,6 +1344,7 @@ def build_help(vitals, mood, memories=None, today=None):
         lines.append(('Today', HOLIDAY_DESCRIPTIONS[vitals.holiday], 'plain'))
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
+        lines.append(('Growing', describe_growth(memories, today or datetime.date.today()), 'plain'))
     lines.append(('Keys', 'p to pet  ·  w to water  ·  ? closes this page  ·  q to quit', 'plain'))
     return lines
 
@@ -1348,7 +1384,8 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
                 row += 1
         return cells
 
-    pet = build_pet(mood, tick, vitals.holiday)
+    growth = growth_stage(days_together(memories, vitals.now.date()))
+    pet = build_pet(mood, tick, vitals.holiday, growth)
     bounced = pet[0][0] == ''
     if bounced:
         pet = pet[1:]  # lay out the resting pet, then move it a row, so the bounce moves the pet and not the bubble
@@ -1562,7 +1599,8 @@ def print_once(forced_mood=None, interface=None):
 
     columns, rows = shutil.get_terminal_size()  # 80x24 when the output is piped
     width, height = min(columns, ONCE_MAX_WIDTH), min(rows, ONCE_MAX_HEIGHT)
-    cells = layout(height, width, mood, 1, pick_saying(mood, vitals), vitals, show_hint=False)
+    memories = load_memories(memories_path())  # read only, so the snapshot shows how grown-up the pet is
+    cells = layout(height, width, mood, 1, pick_saying(mood, vitals), vitals, show_hint=False, memories=memories)
     use_color = sys.stdout.isatty() and 'NO_COLOR' not in os.environ
     for line in render_lines(cells, height, width, use_color):
         print(line)
@@ -1587,7 +1625,7 @@ def load_memories(path):
         return memories
     if not isinstance(saved, dict):
         return memories
-    for key in ('visits', 'times_petted', 'times_watered', 'shooting_stars_seen'):
+    for key in ('visits', 'times_petted', 'times_watered', 'shooting_stars_seen', 'growth_seen'):
         value = saved.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             memories[key] = value
@@ -1615,7 +1653,7 @@ def save_memories(path, memories):
         return False
 
 
-def update_memories(path, add=None, first_met=None, last_seen=None):
+def update_memories(path, add=None, first_met=None, last_seen=None, growth_seen=None):
     """Add counts to the memories on disk and return what's saved. It re-reads the file first, so two
     Pi Pets running at once each add their own counts instead of overwriting each other's."""
     memories = load_memories(path)
@@ -1623,6 +1661,8 @@ def update_memories(path, add=None, first_met=None, last_seen=None):
         memories[key] += amount
     if first_met and not memories['first_met']:
         memories['first_met'] = first_met
+    if growth_seen is not None:
+        memories['growth_seen'] = max(memories['growth_seen'], growth_seen)
     if last_seen is not None:
         memories['last_seen'] = last_seen
     save_memories(path, memories)
@@ -1649,7 +1689,10 @@ class LiveState:
         self.memories = memories
         self.unsaved = {}  # counts added since the last save, for run_live to write with update_memories
         last_seen = memories['last_seen'] if memories else None
-        if last_seen is not None and wall_time is not None and wall_time - last_seen >= MISSED_YOU_SECONDS:
+        self.growth_stage = growth_stage(days_together(memories, vitals.now.date()))
+        if memories and self.growth_stage > memories.get('growth_seen', 0):
+            self.saying = GREW_SAYING  # the first visit since it reached a new look
+        elif last_seen is not None and wall_time is not None and wall_time - last_seen >= MISSED_YOU_SECONDS:
             self.saying = MISSED_YOU_SAYING
         elif vitals.claude_here:
             self.saying = CLAUDE_GREETING
@@ -1767,7 +1810,8 @@ def run_live(screen, forced_mood=None, interface=None):
     colors = curses_colors()
     path = memories_path()
     state = LiveState(Vitals(forced_mood, interface), memories=load_memories(path), wall_time=time.time())
-    state.memories = update_memories(path, add={'visits': 1}, first_met=datetime.date.today().isoformat())
+    state.memories = update_memories(path, add={'visits': 1}, first_met=datetime.date.today().isoformat(),
+                                     growth_seen=state.growth_stage)
     tick = 0
 
     try:
