@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import piPet  # noqa: E402  (imported after the path is set)
 
 DAY = 86400
-HOLIDAYS = (None, 'halloween', 'christmas', 'new_year', 'pi_day', 'birthday')
+HOLIDAYS = (None, 'halloween', 'christmas', 'new_year', 'pi_day', 'birthday', 'valentines', 'st_patricks',
+            'fourth_of_july', 'thanksgiving')
 TICKS = range(24)  # long enough to cover every animation cycle (blink is every 12 ticks)
 
 
@@ -749,13 +750,36 @@ class HolidayTest(unittest.TestCase):
         cases = [((10, 24), None), ((10, 25), 'halloween'), ((10, 31), 'halloween'), ((11, 1), None),
                  ((12, 19), None), ((12, 20), 'christmas'), ((12, 26), 'christmas'), ((12, 27), None),
                  ((12, 31), 'new_year'), ((1, 1), 'new_year'), ((1, 2), None), ((3, 14), 'pi_day'),
-                 ((10, 8), 'birthday'), ((7, 15), None)]
+                 ((10, 8), 'birthday'), ((7, 15), None), ((2, 14), 'valentines'), ((3, 17), 'st_patricks'),
+                 ((7, 4), 'fourth_of_july'), ((11, 26), 'thanksgiving'), ((11, 19), None)]
         for (month, day), holiday in cases:
             with self.subTest(date=(month, day)):
-                self.assertEqual(piPet.holiday_on(month, day), holiday)
+                self.assertEqual(piPet.holiday_on(month, day, 2026), holiday)
+
+    def test_thanksgiving_is_the_fourth_thursday(self):
+        for year, day in ((2026, 26), (2027, 25), (2028, 23), (2029, 22), (2030, 28)):
+            with self.subTest(year=year):
+                self.assertEqual(piPet.thanksgiving_day(year), day)
+                self.assertEqual(datetime.date(year, 11, day).weekday(), 3, 'a Thursday')
+                self.assertEqual(piPet.holiday_on(11, day, year), 'thanksgiving')
+
+    def test_valentines_hearts_float_in_the_sky_day_and_night(self):
+        for hour in (12.0, 22.0):
+            with self.subTest(hour=hour):
+                hearts = [cell for cell in piPet.build_sky(80, hour, 0, holiday='valentines') if cell[2] == '<3']
+                self.assertGreaterEqual(len(hearts), 2)
+                self.assertTrue(all(color == 'berry' for *_, color in hearts))
+        self.assertFalse([cell for cell in piPet.build_sky(80, 12.0, 0) if cell[2] == '<3'])
+
+    def test_fourth_of_july_fireworks_are_red_white_and_blue(self):
+        colors = {color for tick in range(3000) for *_, color in piPet.build_fireworks(80, tick, 3, ['berry', 'plain', 'guard'])}
+        self.assertEqual(colors, {'berry', 'plain', 'guard'})
+        night = {color for tick in range(600) for *_, color in piPet.build_sky(80, 22.0, tick, seed=3, holiday='fourth_of_july')}
+        self.assertTrue(night & {'berry', 'guard'})
+        self.assertFalse(night & {'sun', 'extra', 'leaf'} - {'plain'}, 'only red, white and blue fireworks')
 
     def test_new_art_is_one_column_and_lines_up(self):
-        art = ([piPet.PARTY_HAT, piPet.SANTA_HAT, piPet.PUMPKIN_HAT, 'o'] + piPet.PUMPKIN + piPet.BAT_FRAMES
+        art = ([hat for hat, _ in piPet.HOLIDAY_HATS.values()] + ['o', '<3'] + piPet.PUMPKIN + piPet.BAT_FRAMES
                + piPet.PI_DAY_CLOUDS[0]
                + [text for frame in piPet.FIREWORK_FRAMES for _, _, text in frame])
         for char in ''.join(art):
@@ -767,7 +791,8 @@ class HolidayTest(unittest.TestCase):
 
     def test_holiday_hats_replace_the_leaf(self):
         cases = [('birthday', piPet.PARTY_HAT, 'sun'), ('christmas', piPet.SANTA_HAT, 'berry'),
-                 ('halloween', piPet.PUMPKIN_HAT, 'pumpkin')]
+                 ('halloween', piPet.PUMPKIN_HAT, 'pumpkin'), ('valentines', piPet.HEART_HAT, 'berry'),
+                 ('st_patricks', piPet.TOP_HAT, 'leaf'), ('thanksgiving', piPet.PILGRIM_HAT, 'plain')]
         for holiday, hat, color in cases:
             with self.subTest(holiday=holiday):
                 self.assertEqual(piPet.build_pet('content', 1, holiday)[0], (hat, color))
@@ -856,7 +881,7 @@ class HolidayTest(unittest.TestCase):
         self.assertFalse([line for line in piPet.build_help(make_vitals(), 'content') if line[0] == 'Today'])
 
     def test_every_holiday_has_lines_and_a_description(self):
-        holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
+        holidays = {piPet.holiday_on(month, day, 2026) for month in range(1, 13) for day in range(1, 32)} - {None}
         self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
         self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
 

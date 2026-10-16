@@ -71,6 +71,10 @@ HOLIDAY_SAYINGS = {
     'new_year': ['happy new year!', '3... 2... 1...!', 'ooh, fireworks!'],
     'pi_day': ['happy Pi Day!', '3.14159265...', 'I am the Pi'],
     'birthday': ['happy birthday to me!', 'is there cake?'],  # plus a line with its age
+    'valentines': ['be my valentine?', 'sending you hugs', 'I heart you'],
+    'st_patricks': ['feeling lucky!', 'where did I put my pot of gold?', 'top of the morning!'],
+    'fourth_of_july': ['happy Fourth!', 'red, white and boom!', 'ooh, fireworks!'],
+    'thanksgiving': ['thankful for you!', 'pass the pie!', 'gobble gobble'],
 }
 HOLIDAY_DESCRIPTIONS = {
     'halloween': "Halloween week: a pumpkin hat, a jack-o'-lantern, and bats at night",
@@ -78,14 +82,24 @@ HOLIDAY_DESCRIPTIONS = {
     'new_year': 'New Year: fireworks at night',
     'pi_day': 'Pi Day (3/14): the clouds know their digits',
     'birthday': "Pi Pet's birthday (born Oct 8, 2026): a party hat",
+    'valentines': "Valentine's Day: a heart on its head, and hearts in the sky",
+    'st_patricks': "St. Patrick's Day: a green top hat",
+    'fourth_of_july': 'Fourth of July: red, white and blue fireworks at night',
+    'thanksgiving': 'Thanksgiving: a pilgrim hat',
 }
 PARTY_HAT = '     /*\\     '  # replaces the leaf on Pi Pet's birthday
 SANTA_HAT = '     .--*    '  # ...at Christmas
-PUMPKIN_HAT = '    ((|))    '  # ...and at Halloween
+PUMPKIN_HAT = '    ((|))    '  # ...at Halloween
+HEART_HAT = '     <3      '  # ...on Valentine's Day
+TOP_HAT = '    _[_]_    '  # ...on St. Patrick's Day
+PILGRIM_HAT = '    _|=|_    '  # ...and at Thanksgiving
 HOLIDAY_HATS = {
     'birthday': (PARTY_HAT, 'sun'),
     'christmas': (SANTA_HAT, 'berry'),
     'halloween': (PUMPKIN_HAT, 'pumpkin'),
+    'valentines': (HEART_HAT, 'berry'),
+    'st_patricks': (TOP_HAT, 'leaf'),
+    'thanksgiving': (PILGRIM_HAT, 'plain'),
 }
 PUMPKIN = [' _)_ ', '(^w^)']  # a jack-o'-lantern: stem, then the carved face
 PUMPKIN_OFFSET = 31  # columns from the pet's left edge, just past the plant
@@ -98,6 +112,7 @@ LIGHT_SPACING = 4
 FIREWORK_WINDOW = FPS * 3  # every 3 seconds of New Year's night has a good chance of a firework
 FIREWORK_CHANCE = 2 / 3
 FIREWORK_COLORS = ['berry', 'sun', 'extra', 'planet', 'leaf']
+FIREWORK_HOLIDAY_COLORS = {'new_year': FIREWORK_COLORS, 'fourth_of_july': ['berry', 'plain', 'guard']}  # red, white, blue
 FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one list per tick
     [(2, 0, "'")],  # the rocket goes up
     [(1, 0, '*')],
@@ -380,11 +395,26 @@ def read_uptime_sec():
         return None
 
 
-def holiday_on(month, day):
-    """Which holiday a date falls on, or None: Halloween week, Christmas week, New Year (Dec 31 and Jan 1),
-    Pi Day (Mar 14), and Pi Pet's own birthday (Oct 8)."""
+def thanksgiving_day(year):
+    """The day of November that Thanksgiving (the fourth Thursday) falls on."""
+    first_thursday = 1 + (3 - datetime.date(year, 11, 1).weekday()) % 7  # Monday is 0, Thursday 3
+    return first_thursday + 21
+
+
+def holiday_on(month, day, year):
+    """Which holiday a date falls on, or None: Valentine's Day, Pi Day (Mar 14), St. Patrick's Day,
+    the Fourth of July, Pi Pet's own birthday (Oct 8), Halloween week, Thanksgiving, Christmas week,
+    and New Year (Dec 31 and Jan 1)."""
+    if (month, day) == (2, 14):
+        return 'valentines'
     if (month, day) == (3, 14):
         return 'pi_day'
+    if (month, day) == (3, 17):
+        return 'st_patricks'
+    if (month, day) == (7, 4):
+        return 'fourth_of_july'
+    if (month, day) == (11, thanksgiving_day(year)):
+        return 'thanksgiving'
     if (month, day) == PI_PET_BIRTHDAY:
         return 'birthday'
     if month == 10 and 25 <= day <= 31:
@@ -527,7 +557,7 @@ class Vitals:
         self.moon_age = moon_age_days(time.time())
         self.day_of_year = now.timetuple().tm_yday  # moves the planet a little each night
         self.year = now.year
-        self.holiday = holiday_on(now.month, now.day)
+        self.holiday = holiday_on(now.month, now.day, now.year)
         self.update_net_rate()
         self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
         if self.temp_c is not None:
@@ -949,8 +979,8 @@ def build_bats(width, tick):
     return cells
 
 
-def build_fireworks(width, tick, seed):
-    """A New Year's firework as (row, col, text, color) cells: a rocket, a burst, fading sparks.
+def build_fireworks(width, tick, seed, colors=FIREWORK_COLORS):
+    """A holiday firework as (row, col, text, color) cells: a rocket, a burst, fading sparks.
 
     Like shooting stars, each FIREWORK_WINDOW has a FIREWORK_CHANCE of one, decided from the seed.
     """
@@ -963,15 +993,21 @@ def build_fireworks(width, tick, seed):
     if not 0 <= step < len(FIREWORK_FRAMES):
         return []
     center = rng.randrange(1, width - 2)  # room for the burst's arms on both sides
-    color = rng.choice(FIREWORK_COLORS)
+    color = rng.choice(colors)
     return [(row, center + offset, text, color) for row, offset, text in FIREWORK_FRAMES[step]]
+
+
+def heart_spots(width):
+    """Where Valentine's Day hearts float in the sky: the same spots for the same window width."""
+    rng = random.Random(f'hearts:{width}')
+    return [(rng.randrange(SKY_HEIGHT), rng.randrange(width - 3)) for _ in range(max(2, width // 16))]
 
 
 def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
     the moon in its real phase, a ringed planet, stars and the odd shooting star by night, and a red
     sun, glowing clouds and the first (or last) stars at dusk and dawn. Holidays add bats (Halloween),
-    fireworks (New Year) and clouds made of digits (Pi Day).
+    fireworks (New Year, the Fourth of July), hearts (Valentine's Day) and clouds made of digits (Pi Day).
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -1015,13 +1051,18 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
             for row, col, text in build_bats(width, tick):
                 if is_free(row, col, text):  # else behind the moon
                     place(row, col, text, 'dim')
-        if holiday == 'new_year':
-            burst = build_fireworks(width, tick, seed)
+        if holiday in FIREWORK_HOLIDAY_COLORS:
+            burst = build_fireworks(width, tick, seed, FIREWORK_HOLIDAY_COLORS[holiday])
             if all(is_free(row, col, text) for row, col, text, _ in burst):
                 for row, col, text, color in burst:
                     place(row, col, text, color)
         # A new moon night is darker, so more stars show; the extras come out after the usual ones
         star_count = width // 5 if body is None else width // 8
+
+    if holiday == 'valentines':
+        for row, col in heart_spots(width):
+            if is_free(row, col, '<3', margin=1):  # else behind a cloud, the sun, the moon or another heart
+                place(row, col, '<3', 'berry')
 
     for i, (row, col) in enumerate(star_spots(width, star_count)):
         if not is_free(row, col, '.', margin=1):
