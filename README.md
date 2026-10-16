@@ -76,6 +76,8 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 | USB | A USB drive is plugged in (mounted under `/media/`) | A `\|o_o\|` stick whose activity light blinks; the `?` page names the drive |
 | Music | Sound is playing | A magenta dancer `(^o^)` with a note hopping side to side |
 
+**Pals socialize.** Every 20 to 40 seconds one of them says something in a little bubble over its head ("so many tabs!", "night owl club"), and about half the time two visiting pals have a quick word instead: the fox says "so many tabs!" and VS Code answers "same, honestly". Their lines fit the moment: the guard only says "all quiet on port 53" while DNS really is being served, and the doctor only says "vitals look good" when nothing's wrong.
+
 When you pet the pet, the guard, the doctor, VS Code and the fox cheer, `(^_^)` `(^-^)` `|^_^|` `(^ ^)`, and Claude's sparkle twinkles twice as fast. An alarmed or sleeping guard stays that way: a DNS problem doesn't stop for a celebration.
 
 Pals line up by how permanent they are: the guard nearest the pet, then the doctor, VS Code, the fox, Claude, the owl, a USB stick and the music pal, so the ones that come and go don't make the others move. They stand a column apart, so five fit beside the pet at 80 columns; when more are visiting than fit, the farthest spot takes turns, changing every 10 seconds. If AdGuard Home stops, the alert line says `AdGuard stopped`; if it keeps running but stops serving DNS (nothing bound to UDP port 53), it says `DNS port 53 closed`. On a Pi without AdGuard Home there's no guard.
@@ -125,7 +127,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-239 standard-library tests, no sensors needed. They check:
+246 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -137,6 +139,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
 - the DNS check: finding a bound port-53 socket (and not mistaking an outgoing query for a server), the alarmed guard and its alert, and no alarm unless AdGuard runs with the port closed
+- pals socializing: their lines fitting the situation, conversations needing both pals (and all being well for the guard and doctor), a conversation's timing, a single line, nobody to chat with, and the bubble floating over its pal in its color without reaching the pet
 - the owl, USB and music pals: reading the sound cards and the mounts (a space in a drive name included), the owl's hours, their art, who visits when and where they stand, their animations, and the `?` page
 - the VS Code pal and the fox: their art, visiting only while their program is open, blinking and cheering, the lineup order, Firefox's many process names, and the `?` page
 - pals taking turns: everyone fitting, the last spot cycling through the pals that don't fit, a lone spot shared, and no room at all
