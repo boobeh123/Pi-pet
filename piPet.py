@@ -18,6 +18,7 @@ import math
 import os
 import random
 import re
+import shlex
 import shutil
 import sys
 import textwrap
@@ -30,6 +31,9 @@ DEFAULT_INTERFACE = 'wlan0'  # used when there's no default route to follow
 PET_WIDTH = 13
 MIN_WIDTH = 24
 MIN_HEIGHT = 11
+
+# --autostart prints a desktop entry that opens Pi Pet in LXTerminal when the desktop starts
+AUTOSTART_GEOMETRY = '100x30'  # columns x rows: room for the scene, the trend row and five or more pals
 
 # --once prints a snapshot at the terminal's size, capped so a big terminal doesn't get a page of blank rows
 ONCE_MAX_WIDTH = 80
@@ -125,11 +129,28 @@ FIREWORK_FRAMES = [  # (row, offset from the burst's center column, text), one l
 
 # Pi Pet remembers a few things between runs, in a small JSON file (see memories_path)
 DEFAULT_MEMORIES = {'first_met': None, 'visits': 0, 'times_petted': 0, 'times_watered': 0, 'shooting_stars_seen': 0,
-                    'last_seen': None, 'growth_seen': 0}
+                    'last_seen': None, 'growth_seen': 0, 'badges': {}}  # badges: {id: date earned}; never mutate
 # The pet grows up as your days together add up: (days together, name)
 GROWTH_STAGES = [(0, 'little'), (7, 'leafy'), (30, 'plump'), (100, 'golden')]
 BUSHY_LEAF = '   \\\\\\|///   '  # leafy and up
 GREW_SAYING = 'look, I grew!'
+# Badges, earned from the memories and from what the pet sees: (id, name, how to earn it)
+BADGES = [
+    ('first_pet', 'First pet', 'pet it once'),
+    ('best_friends', 'Best friends', 'pet it 100 times'),
+    ('green_thumb', 'Green thumb', 'water the plant 10 times'),
+    ('stargazer', 'Stargazer', 'see a shooting star'),
+    ('star_collector', 'Star collector', 'see 100 shooting stars'),
+    ('regular', 'Regular', 'visit 10 times'),
+    ('one_week', 'One week together', 'know each other for 7 days'),
+    ('night_owl', 'Night owl', 'keep it company after 10 PM'),
+    ('in_bloom', 'In bloom', 'see the plant flower (a week of uptime)'),
+    ('holiday_spirit', 'Holiday spirit', 'visit on a holiday'),
+    ('whole_gang', 'The whole gang', 'have five pals visit at once'),
+    ('after_the_heat', 'After the heat', 'see a rainbow after a hot spell'),
+]
+BADGE_SAYING = 'new badge: {}!'
+ANNOUNCE_SECONDS = 4  # how long each badge announcement stays up (and how long the opening line gets first)
 MISSED_YOU_SECONDS = 86400  # away this long or more, and the pet says...
 MISSED_YOU_SAYING = 'missed you!'
 
@@ -450,6 +471,25 @@ def growth_stage(days):
     if days is None:
         return 0
     return max((i for i, (min_days, _) in enumerate(GROWTH_STAGES) if days >= min_days), default=0)
+
+
+def badges_earned(memories, vitals, pal_count, today):
+    """The ids of every badge that's earned right now, from the memories and what the pet sees."""
+    checks = {
+        'first_pet': memories['times_petted'] >= 1,
+        'best_friends': memories['times_petted'] >= 100,
+        'green_thumb': memories['times_watered'] >= 10,
+        'stargazer': memories['shooting_stars_seen'] >= 1,
+        'star_collector': memories['shooting_stars_seen'] >= 100,
+        'regular': memories['visits'] >= 10,
+        'one_week': (days_together(memories, today) or 0) >= 7,
+        'night_owl': is_owl_time(vitals.hour),
+        'in_bloom': plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1,
+        'holiday_spirit': vitals.holiday is not None,
+        'whole_gang': pal_count >= 5,
+        'after_the_heat': vitals.rainbow,
+    }
+    return {badge_id for badge_id, earned in checks.items() if earned}
 
 
 def holiday_on(month, day, year):
@@ -1473,6 +1513,15 @@ def describe_growth(memories, today):
     return f'{GROWTH_STAGES[stage][1]} ({together})'
 
 
+def describe_badges(memories):
+    """The badges earned so far, and how to earn the next one."""
+    have = memories.get('badges', {})
+    earned = [name for badge_id, name, _ in BADGES if badge_id in have]
+    text = f'{len(earned)} of {len(BADGES)}' + (f': {", ".join(earned)}' if earned else '')
+    upcoming = next(((name, how) for badge_id, name, how in BADGES if badge_id not in have), None)
+    return text + (f' (next: {upcoming[0]}, {upcoming[1]})' if upcoming else ' (every one!)')
+
+
 def build_help(vitals, mood, memories=None, today=None):
     """The help screen: what everything on screen means right now, as (label, text, color) lines."""
     lines = [
@@ -1493,6 +1542,7 @@ def build_help(vitals, mood, memories=None, today=None):
     if memories is not None:
         lines.append(('Together', describe_memories(memories, today or datetime.date.today()), 'plain'))
         lines.append(('Growing', describe_growth(memories, today or datetime.date.today()), 'plain'))
+        lines.append(('Badges', describe_badges(memories), 'plain'))
     lines.append(('Keys', 'p to pet  ·  w to water  ·  ? closes this page  ·  q to quit', 'plain'))
     return lines
 
@@ -1525,7 +1575,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     if show_help:
         add(1, 2, "Pi Pet: what you're looking at", 'leaf')
         row = 3
-        for label, text, color in build_help(vitals, mood, memories):
+        for label, text, color in build_help(vitals, mood, memories, vitals.now.date()):
             add(row, 2, label, 'dim')
             for line in textwrap.wrap(text, width - 13):  # long lines wrap under their own text
                 add(row, 12, line, color)
@@ -1729,6 +1779,30 @@ def check_interface(name):
     return name
 
 
+def desktop_entry_quote(arg):
+    """Quote one argument for a desktop entry's Exec line (the freedesktop.org rules)."""
+    if not re.search(r'[\s"`$\\]', arg):
+        return arg
+    return '"' + re.sub(r'(["`$\\])', r'\\\1', arg) + '"'
+
+
+def build_autostart_entry(script_path, python=sys.executable):
+    """A desktop entry (for ~/.config/autostart/) that opens Pi Pet in an LXTerminal window when the desktop
+    starts. LXTerminal splits its --command like a shell would, so the command is shell-quoted first."""
+    command = ' '.join(shlex.quote(part) for part in (python, script_path))
+    exec_line = ' '.join(desktop_entry_quote(arg) for arg in (
+        'lxterminal', '--title=Pi Pet', f'--geometry={AUTOSTART_GEOMETRY}', f'--command={command}'))
+    return '\n'.join([
+        '[Desktop Entry]',
+        'Type=Application',
+        'Name=Pi Pet',
+        "Comment=A little raspberry that reacts to the Pi's real vitals",
+        f'Exec={exec_line}',
+        'Terminal=false',
+        '',
+    ])
+
+
 def parse_args(argv=None):
     """Read the command line. Bad options print a usage message and exit before curses starts."""
     parser = argparse.ArgumentParser(
@@ -1739,6 +1813,10 @@ def parse_args(argv=None):
     parser.add_argument(
         '--iface', type=check_interface, metavar='NAME',
         help='network interface to watch, like wlan0 or eth0 (default: whichever carries internet traffic)',
+    )
+    parser.add_argument(
+        '--autostart', action='store_true',
+        help='print a desktop entry that opens Pi Pet when the desktop starts; save it in ~/.config/autostart/',
     )
     return parser.parse_args(argv)
 
@@ -1788,6 +1866,16 @@ def load_memories(path):
     last_seen = saved.get('last_seen')
     if isinstance(last_seen, (int, float)) and not isinstance(last_seen, bool):
         memories['last_seen'] = last_seen
+    badges = saved.get('badges')
+    known = {badge_id for badge_id, _, _ in BADGES}
+    memories['badges'] = {}
+    if isinstance(badges, dict):
+        for badge_id, earned in badges.items():
+            try:
+                if badge_id in known:
+                    memories['badges'][badge_id] = datetime.date.fromisoformat(earned).isoformat()
+            except (TypeError, ValueError):
+                pass
     return memories
 
 
@@ -1805,7 +1893,7 @@ def save_memories(path, memories):
         return False
 
 
-def update_memories(path, add=None, first_met=None, last_seen=None, growth_seen=None):
+def update_memories(path, add=None, first_met=None, last_seen=None, growth_seen=None, badges=None):
     """Add counts to the memories on disk and return what's saved. It re-reads the file first, so two
     Pi Pets running at once each add their own counts instead of overwriting each other's."""
     memories = load_memories(path)
@@ -1815,6 +1903,8 @@ def update_memories(path, add=None, first_met=None, last_seen=None, growth_seen=
         memories['first_met'] = first_met
     if growth_seen is not None:
         memories['growth_seen'] = max(memories['growth_seen'], growth_seen)
+    if badges:
+        memories['badges'] = {**badges, **memories['badges']}  # a badge already saved keeps its (earlier) date
     if last_seen is not None:
         memories['last_seen'] = last_seen
     save_memories(path, memories)
@@ -1860,6 +1950,11 @@ class LiveState:
         self.chat = []  # the lines still to show: (pal name, text)
         self.chat_until = 0
         self.next_chat_at = None  # set on the first step
+        self.badge_news = []  # announcements still to make, like 'new badge: Stargazer!'
+        self.announce_until = 0
+        self.first_step_at = None
+        self.unsaved_badges = {}  # badges earned since the last save, for run_live: {id: date earned}
+
     def press(self, key, now):
         """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
         if key in self.QUIT_KEYS:
@@ -1888,6 +1983,9 @@ class LiveState:
         the mood changes. Returns the mood to show."""
         petted = now < self.petted_until
         wishing = now < self.wish_until
+        announcing = now < self.announce_until
+        if self.first_step_at is None:
+            self.first_step_at = now
         if self.saying == WATER_SAYING and not self.watering(now) and not petted:
             self.saying = pick_saying(self.mood, self.vitals, self.rng)  # done watering
         if self.wish_until and not wishing:
@@ -1898,18 +1996,41 @@ class LiveState:
             self.vitals.refresh()
             new_mood = self.vitals.mood()
             time_for_new_saying = tick > 0 and tick % (FPS * 10) == 0  # not at tick 0: keep the opening line
-            if not petted and not wishing and (new_mood != self.mood or time_for_new_saying):
+            if not petted and not wishing and not announcing and (new_mood != self.mood or time_for_new_saying):
                 self.saying = pick_saying(new_mood, self.vitals, self.rng)
-            if self.vitals.claude_here and not self.claude_was_here and not petted and not wishing:
+            if self.vitals.claude_here and not self.claude_was_here and not petted and not wishing and not announcing:
                 self.saying = CLAUDE_GREETING
             self.claude_was_here = self.vitals.claude_here
             self.mood = new_mood
+            self.check_badges(tick)
         if self.was_petted and not petted:
             self.saying = pick_saying(self.mood, self.vitals, self.rng)  # back to its real mood
         self.was_petted = petted
+        if self.announce_until and not announcing:
+            self.announce_until = 0
+            if not self.badge_news and not petted:
+                self.saying = pick_saying(self.mood, self.vitals, self.rng)  # the news is out
+        opening_done = now >= self.first_step_at + ANNOUNCE_SECONDS  # the opening line gets its moment first
+        if self.badge_news and opening_done and now >= self.announce_until and not petted and not wishing:
+            self.saying = self.badge_news.pop(0)
+            self.announce_until = now + ANNOUNCE_SECONDS
         shown_mood = 'happy' if petted else self.mood
         self.update_chat(tick, now, shown_mood)
         return shown_mood
+
+    def check_badges(self, tick):
+        """Award the badges earned since the last check, and line up an announcement for each."""
+        if self.memories is None:
+            return
+        today = self.vitals.now.date()
+        pal_count = len(build_pals(self.vitals, tick, self.mood))
+        earned = badges_earned(self.memories, self.vitals, pal_count, today)
+        for badge_id, name, _ in BADGES:
+            if badge_id in earned and badge_id not in self.memories['badges']:
+                # A new dict rather than an update, so a shared default is never changed
+                self.memories['badges'] = {**self.memories['badges'], badge_id: today.isoformat()}
+                self.unsaved_badges[badge_id] = today.isoformat()
+                self.badge_news.append(BADGE_SAYING.format(name))
 
     def update_chat(self, tick, now, mood):
         """Pals socialize: every PAL_CHAT_SECONDS one says something, or two have a little conversation."""
@@ -2014,17 +2135,20 @@ def run_live(screen, forced_mood=None, interface=None):
                 screen.addstr(row, col, text, colors[color])
             screen.refresh()
             state.notice(cells, now)
-            if state.unsaved:
-                state.memories = update_memories(path, add=state.unsaved)
-                state.unsaved = {}
+            if state.unsaved or state.unsaved_badges:
+                state.memories = update_memories(path, add=state.unsaved, badges=state.unsaved_badges)
+                state.unsaved, state.unsaved_badges = {}, {}
             tick += 1
             time.sleep(1 / FPS)
     finally:
-        update_memories(path, add=state.unsaved, last_seen=time.time())  # also on Ctrl+C
+        update_memories(path, add=state.unsaved, badges=state.unsaved_badges, last_seen=time.time())  # also on Ctrl+C
 
 
 def main():
     args = parse_args()
+    if args.autostart:
+        print(build_autostart_entry(os.path.abspath(__file__)), end='')
+        return
     if args.once:
         print_once(args.mood, args.iface)
         return

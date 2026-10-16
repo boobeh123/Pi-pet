@@ -3,10 +3,10 @@
 A little raspberry that lives in the terminal and reacts to the Raspberry Pi's real vitals.
 
 <p align="center">
-  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant. Under a moonlit night sky with a ringed planet, a shooting star goes by and the pet says make a wish; it's petted and hops with hearts while the pals cheer; a watering can waters the plant; the help page explains the scene. Then the sky turns from a red dawn and a cloudy day to dusk, the pet sleeps, wakes up groggy, gets busy, surfs, overheats, gets hungry, stuffed and dizzy with red alerts under its stats, celebrates Halloween with bats and a jack-o'-lantern, and ends lonely and offline" width="720">
+  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant. Under a moonlit night sky with a ringed planet, five pals (Claude, a Firefox fox, a VS Code monitor, a doctor and an AdGuard guard) stand beside the grown-up pet and its flowering plant, with live stats, Wi-Fi bars, a spinning fan icon and 10-minute sparklines below. A shooting star goes by and the pet says make a wish; it's petted and the pals cheer; the fox and VS Code chat; the plant gets watered; the help page explains the scene and lists badges. Then a groggy dawn, a busy cloudy day, surfing, overheating, a rainbow after the heat, a full disk and low power with red alerts, a Halloween night with a pumpkin hat, bats and a jack-o'-lantern, Christmas with a Santa hat and lights, and a lonely offline night" width="720">
 </p>
 
-<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night, Halloween and every mood fit in 35 seconds.</sub>
+<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night, the holidays and every mood fit in 40 seconds. Remake it with `python3 docs/renderDemo.py`.</sub>
 
 ## Moods
 
@@ -37,6 +37,21 @@ On Wi-Fi, the status line shows signal bars like a phone (`wlan0 |||| 1.0 KB/s`:
 
 **It remembers you.** The live view keeps a few memories in `~/.local/state/pi-pet/memories.json` (or under `$XDG_STATE_HOME`): the day you first met, how many visits, how many times you've petted it and watered the plant, how many shooting stars you've seen together, and when you last left. If you've been away a day or more it opens with "missed you!", and the `?` page has a "Together" line. Delete the file and it forgets everything (and starts growing up again); `--once` only reads it, so snapshots show how grown-up the pet is.
 
+**Badges.** It awards badges from its memories and from what it sees, says "new badge: Stargazer!" when you earn one, and lists them (with a hint for the next) on the `?` page:
+
+| Badge | How to earn it |
+|---|---|
+| First pet / Best friends | Pet it once / 100 times |
+| Green thumb | Water the plant 10 times |
+| Stargazer / Star collector | See 1 / 100 shooting stars |
+| Regular | Visit 10 times |
+| One week together | Know each other for 7 days |
+| Night owl | Keep it company after 10 PM |
+| In bloom | See the plant flower (a week of uptime) |
+| Holiday spirit | Visit on a holiday |
+| The whole gang | Have five pals visit at once |
+| After the heat | See a rainbow after a hot spell |
+
 **It grows up.** As your days together add up, the pet changes: a bushier leaf `\\\|///` at 7 days, more seeds on its body at 30, and golden leaves at 100. The first time you open it after it reaches a new look it says "look, I grew!", and the `?` page has a "Growing" line with the next one. Holiday hats still go where the leaf is.
 
 **Pet it:** press `p` in the live view and it's happy for 3 seconds: `^‿^` face, a little hop, and red `<3` hearts floating up.
@@ -56,8 +71,18 @@ python3 piPet.py              # live: p to pet it, w to water the plant, ? for h
 python3 piPet.py --once       # print a snapshot of the whole scene and exit (colored in a terminal; NO_COLOR=1 turns colors off)
 python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
+python3 piPet.py --autostart  # print a desktop entry that opens Pi Pet when the desktop starts
 python3 piPet.py --help       # list the options
 ```
+
+**Start it with the desktop:** `--autostart` prints a desktop entry that opens Pi Pet in a 100×30 LXTerminal window at login, using this copy's full path. It only prints; to use it, save it where the desktop looks:
+
+```bash
+mkdir -p ~/.config/autostart
+python3 piPet.py --autostart > ~/.config/autostart/piPet.desktop
+```
+
+Delete that file to stop it. (On Raspberry Pi OS with labwc, `lxsession-xdg-autostart` runs everything in `~/.config/autostart` at login.)
 
 In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). After a hot spell (the CPU at 70 °C or more), once it cools back down, a red-yellow-blue rainbow appears for 10 minutes on the side of the sky opposite the sun, behind any passing clouds. In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky, and the pet says "make a wish!" A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
 
@@ -121,13 +146,22 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 | Thanksgiving | The fourth Thursday of November | A pilgrim hat `_\|=\|_` |
 | Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
 
+## Making the demo GIF
+
+```bash
+python3 docs/renderDemo.py                 # rewrites docs/piPetDemo.gif
+python3 docs/renderDemo.py --out demo.gif  # or writes it somewhere else
+```
+
+It draws every frame with Pi Pet's own `layout()` and scripted readings (the scenes are listed at the top of the script), then builds the GIF with ffmpeg. It needs Pillow (`sudo apt install python3-pil`), ffmpeg, and fonts fontconfig can find: DejaVu Sans Mono, plus a monospace font with Braille for the sparklines (FreeMono on Raspberry Pi OS). It sends nothing anywhere and only writes the GIF; frames go to a temporary folder that's deleted afterwards.
+
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-246 standard-library tests, no sensors needed. They check:
+260 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -154,6 +188,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
+- badges: each one's condition, announcements one at a time after the opening line, awarding each badge once, petting coming first, no badges without memories, never changing the shared defaults, keeping the first date earned when saving, dropping damaged entries, and the `?` page's list
 - growing up: days together and the four looks (and their boundaries), every mood's lines staying aligned at every look, hats still winning, "look, I grew!" only the first time, remembering the look it showed off, the "Growing" line, and `--once` reading the memories without writing them
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
@@ -168,6 +203,8 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
+- the demo GIF renderer: every layout color having an RGB, and every scene laying out with real moods (without needing Pillow)
+- `--autostart`: the entry opening Pi Pet in LXTerminal, a path with a space and quotes surviving both kinds of quoting, and the option printing the entry
 
 ## Where the data comes from
 
