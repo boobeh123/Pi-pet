@@ -4,6 +4,7 @@
 """
 
 import datetime
+import importlib.util
 import io
 import json
 import os
@@ -1326,6 +1327,33 @@ class AutostartTest(unittest.TestCase):
             piPet.main()
         self.assertIn(os.path.abspath(piPet.__file__), stdout.getvalue())
         self.assertTrue(stdout.getvalue().startswith('[Desktop Entry]'))
+
+
+class RenderDemoTest(unittest.TestCase):
+    """docs/renderDemo.py stays in step with Pi Pet. It only needs Pillow to draw, so these run without it."""
+
+    @classmethod
+    def setUpClass(cls):
+        path = Path(__file__).resolve().parent.parent / 'docs' / 'renderDemo.py'
+        spec = importlib.util.spec_from_file_location('renderDemo', path)
+        cls.demo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.demo)
+
+    def test_every_layout_color_has_an_rgb(self):
+        self.assertLessEqual(set(piPet.ANSI_COLORS), set(self.demo.COLORS))
+
+    def test_every_scene_lays_out(self):
+        tick = 0
+        for mood, saying, frames, readings, options in [self.demo.OPENING] + self.demo.SCENES:
+            with self.subTest(mood=mood, saying=saying):
+                self.assertIn(mood, piPet.FACES)
+                self.assertGreater(frames, 0)
+                vitals = make_vitals(**{**self.demo.BASE, **readings})
+                cells = piPet.layout(self.demo.HEIGHT, self.demo.WIDTH, mood, tick, saying, vitals,
+                                     memories=self.demo.MEMORIES, **options)
+                self.assertTrue(cells)
+                self.assertTrue(all(color in self.demo.COLORS for *_, color in cells))
+            tick += frames
 
 
 class OnceTest(unittest.TestCase):

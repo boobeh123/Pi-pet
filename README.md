@@ -3,10 +3,10 @@
 A little raspberry that lives in the terminal and reacts to the Raspberry Pi's real vitals.
 
 <p align="center">
-  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant. Under a moonlit night sky with a ringed planet, a shooting star goes by and the pet says make a wish; it's petted and hops with hearts while the pals cheer; a watering can waters the plant; the help page explains the scene. Then the sky turns from a red dawn and a cloudy day to dusk, the pet sleeps, wakes up groggy, gets busy, surfs, overheats, gets hungry, stuffed and dizzy with red alerts under its stats, celebrates Halloween with bats and a jack-o'-lantern, and ends lonely and offline" width="720">
+  <img src="docs/piPetDemo.gif" alt="Pi Pet's raspberry standing on the grass with its pals (a gold Claude sparkle, a doctor with a clipboard, and a blue AdGuard guard) and a potted plant. Under a moonlit night sky with a ringed planet, five pals (Claude, a Firefox fox, a VS Code monitor, a doctor and an AdGuard guard) stand beside the grown-up pet and its flowering plant, with live stats, Wi-Fi bars, a spinning fan icon and 10-minute sparklines below. A shooting star goes by and the pet says make a wish; it's petted and the pals cheer; the fox and VS Code chat; the plant gets watered; the help page explains the scene and lists badges. Then a groggy dawn, a busy cloudy day, surfing, overheating, a rainbow after the heat, a full disk and low power with red alerts, a Halloween night with a pumpkin hat, bats and a jack-o'-lantern, Christmas with a Santa hat and lights, and a lonely offline night" width="720">
 </p>
 
-<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night, Halloween and every mood fit in 35 seconds.</sub>
+<sub>Rendered frame by frame by Pi Pet's own `layout()`, the same code that draws the live view, with scripted readings so that a day, a night, the holidays and every mood fit in 40 seconds. Remake it with `python3 docs/renderDemo.py`.</sub>
 
 ## Moods
 
@@ -146,13 +146,22 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 | Thanksgiving | The fourth Thursday of November | A pilgrim hat `_\|=\|_` |
 | Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
 
+## Making the demo GIF
+
+```bash
+python3 docs/renderDemo.py                 # rewrites docs/piPetDemo.gif
+python3 docs/renderDemo.py --out demo.gif  # or writes it somewhere else
+```
+
+It draws every frame with Pi Pet's own `layout()` and scripted readings (the scenes are listed at the top of the script), then builds the GIF with ffmpeg. It needs Pillow (`sudo apt install python3-pil`), ffmpeg, and fonts fontconfig can find: DejaVu Sans Mono, plus a monospace font with Braille for the sparklines (FreeMono on Raspberry Pi OS). It sends nothing anywhere and only writes the GIF; frames go to a temporary folder that's deleted afterwards.
+
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-258 standard-library tests, no sensors needed. They check:
+260 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -194,6 +203,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
+- the demo GIF renderer: every layout color having an RGB, and every scene laying out with real moods (without needing Pillow)
 - `--autostart`: the entry opening Pi Pet in LXTerminal, a path with a space and quotes surviving both kinds of quoting, and the option printing the entry
 
 ## Where the data comes from
