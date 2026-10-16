@@ -131,6 +131,14 @@ WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
+CLOCK_TICKS_PER_SECOND = os.sysconf('SC_CLK_TCK')  # the unit of CPU time in /proc/<pid>/stat (100 on Linux)
+BUSY_SAYING = '{} is keeping me busy!'
+BUSY_SAYING_CHANCE = 1 / 2
+FIREFOX_PROCESS_NAMES = ('firefox', 'firefox-esr', 'Web Content', 'Isolated Web Co', 'WebExtensions', 'Privileged Cont',
+                         'RDD Process', 'Socket Process', 'Utility Process', 'GPU Process')  # Firefox's many processes
+FRIENDLY_PROCESS_NAMES = {'code': 'VS Code', 'chromium': 'Chromium', 'claude': 'Claude', 'node': 'Node',
+                          'python3': 'Python', 'AdGuardHome': 'AdGuard', 'mongod': 'MongoDB',
+                          **{name: 'Firefox' for name in FIREFOX_PROCESS_NAMES}}
 
 # Faces: (left eye, right eye, mouth). Every character must be exactly one terminal column wide,
 # so no emoji or East Asian wide characters, or the body falls out of alignment.
@@ -378,16 +386,50 @@ def holiday_on(month, day):
     return None
 
 
-def read_process_names():
-    """The names of every running process (from /proc/*/comm, so at most 15 characters each)."""
-    names = set()
-    for comm_path in glob.glob('/proc/[0-9]*/comm'):
+def read_process_ticks():
+    """Every running program's processes except Pi Pet itself, as {pid: (name, CPU clock ticks used so far,
+    start time)}, from /proc/<pid>/stat. Names are at most 15 characters, the same as /proc/<pid>/comm.
+
+    Kernel threads (kthreadd, pid 2, and its children) are left out: they aren't programs anyone opened,
+    and kworker threads rename themselves as they switch jobs."""
+    processes = {}
+    own_pid = os.getpid()
+    for stat_path in glob.glob('/proc/[0-9]*/stat'):
         try:
-            with open(comm_path) as f:
-                names.add(f.read().strip())
-        except OSError:
+            with open(stat_path) as f:
+                stat = f.read()
+            pid_text, _, rest = stat.partition(' (')
+            name, _, fields = rest.rpartition(') ')  # the name itself can contain spaces and parentheses
+            fields = fields.split()
+            pid, parent = int(pid_text), int(fields[1])
+            if pid != own_pid and pid != 2 and parent != 2:
+                # user time + system time, and the start time, which tells a process apart from a later one with its pid
+                processes[pid] = (name, int(fields[11]) + int(fields[12]), int(fields[19]))
+        except (OSError, ValueError, IndexError):
             continue  # the process ended while we looked
-    return names
+    return processes
+
+
+def busiest_process(before, after, seconds):
+    """The program that used the most CPU between two readings of read_process_ticks, as (friendly name,
+    percent of one core), adding up all of a program's processes (all of Firefox's, say). None if nothing
+    used 1%."""
+    used = {}
+    for pid, (name, ticks, started) in after.items():
+        earlier = before.get(pid)
+        # A process that's new since the last reading used all of its time in between (a reused pid is new too)
+        start = earlier[1] if earlier and earlier[2] == started else 0
+        program = friendly_name(name)
+        used[program] = used.get(program, 0) + max(0, ticks - start)
+    if not used or seconds <= 0:
+        return None
+    name, ticks = max(used.items(), key=lambda item: item[1])
+    percent = ticks / CLOCK_TICKS_PER_SECOND / seconds * 100
+    return (name, percent) if percent >= 1 else None
+
+
+def friendly_name(process_name):
+    return FRIENDLY_PROCESS_NAMES.get(process_name, process_name)
 
 
 def is_port_listening(port):
@@ -445,6 +487,9 @@ class Vitals:
         self.last_net = read_net_bytes(self.interface)
         self.last_time = time.monotonic()
         self.net_rate = 0
+        self.process_ticks = None  # the last read_process_ticks, for working out the busiest program
+        self.process_time = None
+        self.busiest = None  # (name, percent of one core), once there are two readings to compare
         self.refresh()
 
     def refresh(self):
@@ -456,10 +501,11 @@ class Vitals:
         self.disk_used_percent = read_disk_used_percent()
         self.uptime_sec = read_uptime_sec()
         self.online = get_default_interface() is not None
-        processes = read_process_names()
-        self.claude_here = 'claude' in processes  # a Claude Code session, in VS Code or the terminal
+        processes = self.update_busiest()
+        names = {name for name, _, _ in processes.values()}
+        self.claude_here = 'claude' in names  # a Claude Code session, in VS Code or the terminal
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
-        self.adguard_running = 'AdGuardHome' in processes if is_adguard_installed() else None
+        self.adguard_running = 'AdGuardHome' in names if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
         # Only asked while AdGuard runs: is it actually serving DNS? None means "not asked"
         self.dns_answering = is_udp_port_bound(DNS_PORT) if self.adguard_running else None
@@ -472,6 +518,18 @@ class Vitals:
         self.holiday = holiday_on(now.month, now.day)
         self.update_net_rate()
         self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
+
+    def update_busiest(self):
+        """Read every process's CPU time, and work out the busiest program since the last reading at least
+        MIN_RATE_SECONDS ago (closer readings would turn one tick into a huge percentage). Returns the reading."""
+        now = time.monotonic()
+        processes = read_process_ticks()
+        if self.process_ticks is None:
+            self.process_ticks, self.process_time = processes, now  # nothing to compare with yet
+        elif now - self.process_time >= MIN_RATE_SECONDS:
+            self.busiest = busiest_process(self.process_ticks, processes, now - self.process_time)
+            self.process_ticks, self.process_time = processes, now
+        return processes
 
     def update_net_rate(self):
         """Bytes per second since the last reading that was at least MIN_RATE_SECONDS ago."""
@@ -999,7 +1057,8 @@ def explain_mood(vitals, mood):
     if mood == 'lonely':
         return 'no route to the internet'
     if mood == 'busy':
-        return f'1-minute load {vitals.load:.2f} ({BUSY_LOAD} or more)'
+        busiest = f', mostly {vitals.busiest[0]}' if vitals.busiest else ''
+        return f'1-minute load {vitals.load:.2f} ({BUSY_LOAD} or more){busiest}'
     if mood == 'surfing':
         return f'{format_rate(vitals.net_rate)} on {vitals.interface} ({SURF_BYTES_PER_SEC // 1024} KB/s or more)'
     if mood == 'sleepy':
@@ -1086,6 +1145,9 @@ def build_help(vitals, mood, memories=None, today=None):
         ('Sky', describe_sky(vitals), 'plain'),
         ('Network', describe_network(vitals), 'plain'),
     ]
+    if vitals.busiest:
+        name, percent = vitals.busiest
+        lines.append(('Busiest', f'{name}, {percent:.0f}% of one core (of {os.cpu_count()})', 'plain'))
     for i, (text, color) in enumerate(describe_pals(vitals, mood)):
         lines.append(('Pals' if i == 0 else '', text, color))
     lines.append(('Plant', describe_plant(vitals), 'plain'))
@@ -1286,7 +1348,10 @@ def holiday_sayings(vitals):
 
 
 def pick_saying(mood, vitals, rng=random):
-    """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
+    """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead,
+    and a busy pet sometimes says which program is keeping it busy."""
+    if mood == 'busy' and vitals.busiest and rng.random() < BUSY_SAYING_CHANCE:
+        return BUSY_SAYING.format(vitals.busiest[0])
     friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
                       + (GUARD_SAYINGS if vitals.adguard_running and vitals.dns_answering is not False else [])
                       + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])

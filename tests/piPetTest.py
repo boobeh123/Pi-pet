@@ -27,7 +27,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
-                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None):
+                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -53,6 +53,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.year = year
     vitals.now = now
     vitals.wifi_dbm = wifi_dbm
+    vitals.busiest = busiest
     return vitals
 
 
@@ -356,14 +357,18 @@ class ClaudePalTest(unittest.TestCase):
             name = names[paths.index(path)]
             if name is None:
                 raise FileNotFoundError(path)  # the process ended while we looked
-            return io.StringIO(name + '\n')
+            pid = path.split('/')[2]
+            return io.StringIO(f'{pid} ({name}) S 1 1 1 0 -1 4194560 100 0 0 0 7 3 0 0 20 0 1 0 50 0 0\n')
 
-        return mock.patch.object(piPet.glob, 'glob', return_value=paths), mock.patch('builtins.open', side_effect=fake_open)
+        return (mock.patch.object(piPet.glob, 'glob', return_value=[path.replace('comm', 'stat') for path in paths]),
+                mock.patch('builtins.open', side_effect=lambda path, *a, **k: fake_open(path.replace('stat', 'comm'))))
 
-    def test_reads_process_names(self):
+    def test_reads_every_process_name(self):
         patch_glob, patch_open = self.fake_processes(['bash', None, 'claude', 'AdGuardHome'])
         with patch_glob, patch_open:
-            self.assertEqual(piPet.read_process_names(), {'bash', 'claude', 'AdGuardHome'})
+            processes = piPet.read_process_ticks()
+        self.assertEqual({name for name, _, _ in processes.values()}, {'bash', 'claude', 'AdGuardHome'})
+        self.assertEqual({ticks for _, ticks, _ in processes.values()}, {10}, 'user time 7 + system time 3')
 
     def test_pal_frames_line_up(self):
         for frame in piPet.CLAUDE_PAL:
@@ -856,6 +861,72 @@ Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE
  face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22
  wlan0: 0000   70.  -22.  -256        0      0      0      5      0        0
 """
+
+
+def stat_line(pid, name, ticks=10, parent=1, started=50):
+    """A /proc/<pid>/stat line with the fields Pi Pet reads: parent pid, user + system time, start time."""
+    return f'{pid} ({name}) S {parent} 1 1 0 -1 4194560 100 0 0 0 {ticks - 3} 3 0 0 20 0 1 0 {started} 0 0\n'
+
+
+class BusiestTest(unittest.TestCase):
+    def read(self, stats):
+        """read_process_ticks over fake /proc/<pid>/stat files, given {pid: stat line}."""
+        paths = {f'/proc/{pid}/stat': line for pid, line in stats.items()}
+        with mock.patch.object(piPet.glob, 'glob', return_value=list(paths)), \
+                mock.patch('builtins.open', side_effect=lambda path, *a, **k: io.StringIO(paths[path])):
+            return piPet.read_process_ticks()
+
+    def test_reads_names_with_spaces_and_parentheses(self):
+        processes = self.read({10: stat_line(10, 'Web Content', 25), 11: stat_line(11, 'odd) name', 5, started=60)})
+        self.assertEqual(processes, {10: ('Web Content', 25, 50), 11: ('odd) name', 5, 60)})
+
+    def test_leaves_out_kernel_threads_and_pi_pet_itself(self):
+        own = os.getpid()
+        processes = self.read({2: stat_line(2, 'kthreadd', parent=0), 99: stat_line(99, 'kworker/u16:1-v3d_render', parent=2),
+                               own: stat_line(own, 'python3'), 300: stat_line(300, 'code')})
+        self.assertEqual(list(processes), [300])
+
+    def test_busiest_adds_up_a_programs_processes(self):
+        before = {1: ('code', 100, 5), 2: ('code', 50, 5), 3: ('Web Content', 10, 7), 4: ('firefox', 10, 7)}
+        after = {1: ('code', 130, 5), 2: ('code', 60, 5), 3: ('Web Content', 40, 7), 4: ('firefox', 25, 7)}
+        # VS Code used 30 + 10 = 40 ticks; Firefox used 30 + 15 = 45 ticks, over 2 seconds
+        name, percent = piPet.busiest_process(before, after, seconds=2.0)
+        self.assertEqual(name, 'Firefox')
+        self.assertAlmostEqual(percent, 45 / piPet.CLOCK_TICKS_PER_SECOND / 2.0 * 100)
+
+    def test_a_renamed_process_is_not_new_but_a_reused_pid_is(self):
+        before = {1: ('kworker/a', 10_000, 5), 2: ('bash', 10_000, 5)}
+        renamed = {1: ('worker-b', 10_010, 5), 2: ('bash', 10_000, 5)}  # same start time: only 10 ticks used
+        self.assertAlmostEqual(piPet.busiest_process(before, renamed, 1.0)[1], 10 / piPet.CLOCK_TICKS_PER_SECOND * 100)
+        reused = {1: ('make', 40, 9), 2: ('bash', 10_000, 5)}  # a new process got pid 1: all 40 ticks are new
+        self.assertEqual(piPet.busiest_process(before, reused, 1.0)[0], 'make')
+
+    def test_nothing_busy_is_none(self):
+        self.assertIsNone(piPet.busiest_process({1: ('bash', 10, 5)}, {1: ('bash', 10, 5)}, 2.0))
+        self.assertIsNone(piPet.busiest_process({}, {}, 2.0))
+        self.assertIsNone(piPet.busiest_process({1: ('bash', 10, 5)}, {1: ('bash', 20, 5)}, 0))
+
+    def test_readings_too_close_together_are_skipped(self):
+        vitals = object.__new__(piPet.Vitals)
+        vitals.process_ticks, vitals.process_time, vitals.busiest = None, None, None
+        readings = [{1: ('code', 0, 5)}, {1: ('code', 100, 5)}, {1: ('code', 300, 5)}]
+        with mock.patch.object(piPet, 'read_process_ticks', side_effect=readings), \
+                mock.patch.object(piPet.time, 'monotonic', side_effect=[10.0, 10.1, 12.0]):
+            vitals.update_busiest()
+            self.assertIsNone(vitals.busiest, 'nothing to compare with yet')
+            vitals.update_busiest()
+            self.assertIsNone(vitals.busiest, '0.1 seconds is too close')
+            vitals.update_busiest()
+        self.assertEqual(vitals.busiest, ('VS Code', 300 / piPet.CLOCK_TICKS_PER_SECOND / 2.0 * 100))
+
+    def test_the_pet_says_who_is_keeping_it_busy(self):
+        busy = make_vitals(load=2.5, busiest=('Firefox', 85.0))
+        said = {piPet.pick_saying('busy', busy, random.Random(8)) for _ in range(50)}
+        self.assertIn('Firefox is keeping me busy!', said)
+        self.assertIn('mostly Firefox', piPet.explain_mood(busy, 'busy'))
+        help_lines = {label: text for label, text, _ in piPet.build_help(busy, 'busy')}
+        self.assertEqual(help_lines['Busiest'], f'Firefox, 85% of one core (of {os.cpu_count()})')
+        self.assertNotIn('Busiest', {label for label, _, _ in piPet.build_help(make_vitals(), 'content')})
 
 
 class WifiTest(unittest.TestCase):
@@ -1579,7 +1650,8 @@ class NetRateTest(unittest.TestCase):
     def test_startup_does_not_spike(self):
         # One 1500-byte packet between the two readings at startup used to read as ~30 MB/s
         with mock.patch.object(piPet.time, 'monotonic', side_effect=[100.0, 100.00005]), \
-                mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]):
+                mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]), \
+                mock.patch.object(piPet.Vitals, 'update_busiest', return_value={}):  # it reads the clock too
             vitals = piPet.Vitals(interface='wlan0')
         self.assertEqual(vitals.net_rate, 0)
         self.assertNotEqual(vitals.mood(), 'surfing')

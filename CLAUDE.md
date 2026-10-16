@@ -32,7 +32,7 @@ script -q -c "stty cols 80 rows 24; TERM=xterm-256color timeout --foreground 2 p
 
 The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → curses**.
 
-- **Readers** (`read_*`, `get_default_interface`, `read_process_names`, `is_adguard_installed`) read `/sys`, `/proc` and `os.statvfs` directly. Each returns `None` when its source is missing, and a `None` reading must never trigger a mood or alert. The project runs on non-Pi machines, where every sensor is missing.
+- **Readers** (`read_*`, `get_default_interface`, `is_adguard_installed`; `read_process_ticks` is the one pass over `/proc/<pid>/stat` that gives both the process names for the pals and the CPU time for `busiest_process`, keyed by pid plus start time and leaving out kernel threads) read `/sys`, `/proc` and `os.statvfs` directly. Each returns `None` when its source is missing, and a `None` reading must never trigger a mood or alert. The project runs on non-Pi machines, where every sensor is missing.
 - **`Vitals`** refreshes every reading on each `refresh()`, which happens every 2 s in the live loop.
   - Network speed comes from `update_net_rate()`. It skips readings closer than `MIN_RATE_SECONDS`, and it resets the measurement when the default-route interface changes.
   - `mood()` is an ordered priority chain: dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content. `happy` exists only for petting and `--mood`; the sensors never pick it.

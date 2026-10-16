@@ -25,6 +25,8 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 | Sleepy | Load under 0.3 and almost no network traffic | Eyes closed, floating Zs |
 | Content | Anything else | Smiles and blinks |
 
+When the pet is busy it sometimes says which program is keeping it busy ("Firefox is keeping me busy!"), adding up all of a program's processes (VS Code's 20-odd count as one), and the `?` page always shows the busiest program and how much of a core it's using.
+
 On Wi-Fi, the status line shows signal bars like a phone (`wlan0 |||| 1.0 KB/s`: four bars at -55 dBm or stronger, one fewer every 10 dBm). With one bar or less, the alert line says `weak Wi-Fi` and the pet frets about it now and then.
 
 **What am I looking at?** Press `?` in the live view for a page that explains the scene from the Pi's real readings: why the pet is in its mood (with the numbers), the network and Wi-Fi signal, what's in the sky (the moon's phase, why there are that many clouds), why each pal is visiting, how the plant has grown, and any alerts. Press `?` again to go back.
@@ -108,7 +110,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-189 standard-library tests, no sensors needed. They check:
+196 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -132,6 +134,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
+- the busiest program: reading names with spaces and parentheses, leaving out kernel threads and Pi Pet itself, adding up a program's processes (Firefox's many), telling a renamed process from a reused pid, skipping readings too close together, and what the pet and the `?` page say
 - Wi-Fi: reading the signal for one interface (and nothing for wired ones), bars like a phone, bars on the status line, the weak-signal alert and fretting, and the help page's Network line
 - the clock: its format (midnight, noon, single-digit hours), its corner, and leaving it out where there's no room or in a snapshot
 - watering: `w` pours for 3 seconds and counts once per watering, the can's spout over the middle of every plant stage with drops falling between, no can without a plant or room, and the key hint in three widths
@@ -162,5 +165,6 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Pi Vitals doctor | a socket listening on port 3141 in `/proc/net/tcp` or `tcp6` (read only, never connects) |
 | AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs and a UDP socket is bound to port 53 in `/proc/net/udp` or `udp6` (read only, never sends a query) |
 | Online | a default route in `/proc/net/route` |
+| Busiest program | `/proc/<pid>/stat` (user + system CPU time per process, compared between polls; kernel threads and Pi Pet itself left out) |
 | Wi-Fi signal | `/proc/net/wireless` (signal level in dBm for the watched interface) |
 | Network traffic | `/proc/net/dev` (bytes in + out, compared between polls) on the interface the default route uses in `/proc/net/route` (lowest metric wins, falls back to `wlan0`). `--iface` picks one instead. |
