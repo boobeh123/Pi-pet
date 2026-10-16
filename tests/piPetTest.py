@@ -29,7 +29,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
                 now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
-                load_history=(), rainbow=False):
+                load_history=(), rainbow=False, vscode_open=False, firefox_open=False):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -57,6 +57,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.wifi_dbm = wifi_dbm
     vitals.busiest = busiest
     vitals.rainbow = rainbow
+    vitals.vscode_open = vscode_open
+    vitals.firefox_open = firefox_open
     vitals.temp_history = list(temp_history)
     vitals.load_history = list(load_history)
     return vitals
@@ -1787,6 +1789,43 @@ class PalTurnsTest(unittest.TestCase):
 
     def test_no_room(self):
         self.assertEqual(self.names(4), [])
+
+
+class ProgramPalTest(unittest.TestCase):
+    def pals(self, mood='content', tick=5, **readings):
+        """The faces (middle rows) of the program pals on screen, by color: cyan VS Code, orange fox."""
+        faces = {frame[1] for frame in piPet.FOX_PAL + piPet.VS_CODE_PAL + [piPet.FOX_CHEERING, piPet.VS_CODE_CHEERING]}
+        cells = piPet.layout(24, 80, mood, tick, 'hi', make_vitals(**readings))
+        return {color: text for *_, text, color in cells if text in faces}
+
+    def test_art_lines_up_and_is_one_column(self):
+        for frame in piPet.FOX_PAL + piPet.VS_CODE_PAL + [piPet.FOX_CHEERING, piPet.VS_CODE_CHEERING]:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            self.assertTrue(all(is_one_column(char) for char in ''.join(frame)))
+
+    def test_they_visit_while_their_program_is_open(self):
+        self.assertEqual(self.pals(), {})
+        self.assertEqual(self.pals(vscode_open=True), {'extra': '|</>|'})
+        self.assertEqual(self.pals(firefox_open=True), {'pumpkin': '(o o)'})
+
+    def test_they_blink_and_cheer(self):
+        self.assertEqual(self.pals(firefox_open=True, tick=0)['pumpkin'], '(- -)')
+        self.assertEqual(self.pals(vscode_open=True, tick=2)['extra'], '|</_|')
+        self.assertEqual(self.pals('happy', vscode_open=True, firefox_open=True), {'extra': '|^_^|', 'pumpkin': '(^ ^)'})
+
+    def test_lineup_order(self):
+        vitals = make_vitals(adguard_running=True, pi_vitals_running=True, vscode_open=True, firefox_open=True,
+                             claude_here=True)
+        self.assertEqual([name for name, _, _ in piPet.build_pals(vitals, 5, 'content')],
+                         ['guard', 'doctor', 'vscode', 'fox', 'claude'])
+
+    def test_firefox_has_many_process_names(self):
+        for name in ('firefox', 'Web Content', 'Isolated Web Co', 'WebExtensions'):
+            self.assertIn(name, piPet.FIREFOX_PROCESS_NAMES)
+
+    def test_help_says_why_they_are_here(self):
+        lines = [text for text, _ in piPet.describe_pals(make_vitals(vscode_open=True, firefox_open=True), 'content')]
+        self.assertEqual(lines, ['code    VS Code is open', 'fox     Firefox is open'])
 
 
 class CheerTest(unittest.TestCase):

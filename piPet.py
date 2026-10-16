@@ -257,6 +257,12 @@ DOCTOR_WORRIED = [' _+_ ', '(O-O)', '/|=|\\']
 DOCTOR_CHEERING = [' _+_ ', '(^-^)', '\\|=|/']  # arms up, while the pet is being petted
 URGENT_MOODS = ('dizzy', 'hot', 'stuffed', 'hungry')
 
+# Program pals: they visit while their program is open
+FOX_PAL = [['/\\ /\\', '(o o)', ' \\v/ '], ['/\\ /\\', '(- -)', ' \\v/ ']]  # Firefox; the second frame is a blink
+FOX_CHEERING = ['/\\ /\\', '(^ ^)', ' \\v/ ']
+VS_CODE_PAL = [['.---.', '|</>|', "'---'"], ['.---.', '|</_|', "'---'"]]  # VS Code; the > blinks like a cursor
+VS_CODE_CHEERING = ['.---.', '|^_^|', "'---'"]
+
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
 
@@ -571,6 +577,8 @@ class Vitals:
         processes = self.update_busiest()
         names = {name for name, _, _ in processes.values()}
         self.claude_here = 'claude' in names  # a Claude Code session, in VS Code or the terminal
+        self.vscode_open = 'code' in names
+        self.firefox_open = any(name in names for name in FIREFOX_PROCESS_NAMES)
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
         self.adguard_running = 'AdGuardHome' in names if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
@@ -1138,8 +1146,8 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
 def build_pals(vitals, tick, mood):
     """The pals visiting right now, nearest the pet first, as (name, lines, color) for this frame.
 
-    They line up by how permanent they are (guard, doctor, then Claude), so the ones that come and go
-    don't make the others move, and a narrow window drops the most fleeting first. While the pet is
+    They line up by how permanent they are (guard, doctor, VS Code, Firefox, then Claude), so the ones
+    that come and go don't make the others move, and a narrow window drops the most fleeting first. While the pet is
     happy (being petted) they cheer, unless the guard is busy with a DNS problem or asleep.
     """
     cheering = mood == 'happy'
@@ -1158,6 +1166,12 @@ def build_pals(vitals, tick, mood):
             pals.append(('doctor', DOCTOR_WORRIED, 'doctor'))
         else:
             pals.append(('doctor', DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
+    if vitals.vscode_open:
+        frame = VS_CODE_CHEERING if cheering else VS_CODE_PAL[tick // 2 % len(VS_CODE_PAL)]  # the cursor blinks
+        pals.append(('vscode', frame, 'extra'))
+    if vitals.firefox_open:
+        frame = FOX_CHEERING if cheering else FOX_PAL[1 if tick % 24 < 2 else 0]  # a blink every 6 seconds
+        pals.append(('fox', frame, 'pumpkin'))
     if vitals.claude_here:
         twinkle_ticks = 2 if cheering else 4  # twinkles about once a second, twice as fast when cheering
         pals.append(('claude', CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
@@ -1296,6 +1310,10 @@ def describe_pals(vitals, mood):
     if vitals.pi_vitals_running:
         worried = ', and worried about me' if mood in URGENT_MOODS else ''
         lines.append((f'doctor  Pi Vitals is listening on port {PI_VITALS_PORT}{worried}', 'plain'))
+    if vitals.vscode_open:
+        lines.append(('code    VS Code is open', 'plain'))
+    if vitals.firefox_open:
+        lines.append(('fox     Firefox is open', 'plain'))
     if vitals.claude_here:
         lines.append(('Claude  a Claude Code session is open', 'plain'))
     return lines or [('nobody is visiting right now', 'plain')]
