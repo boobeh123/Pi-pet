@@ -37,6 +37,21 @@ On Wi-Fi, the status line shows signal bars like a phone (`wlan0 |||| 1.0 KB/s`:
 
 **It remembers you.** The live view keeps a few memories in `~/.local/state/pi-pet/memories.json` (or under `$XDG_STATE_HOME`): the day you first met, how many visits, how many times you've petted it and watered the plant, how many shooting stars you've seen together, and when you last left. If you've been away a day or more it opens with "missed you!", and the `?` page has a "Together" line. Delete the file and it forgets everything (and starts growing up again); `--once` only reads it, so snapshots show how grown-up the pet is.
 
+**Badges.** It awards badges from its memories and from what it sees, says "new badge: Stargazer!" when you earn one, and lists them (with a hint for the next) on the `?` page:
+
+| Badge | How to earn it |
+|---|---|
+| First pet / Best friends | Pet it once / 100 times |
+| Green thumb | Water the plant 10 times |
+| Stargazer / Star collector | See 1 / 100 shooting stars |
+| Regular | Visit 10 times |
+| One week together | Know each other for 7 days |
+| Night owl | Keep it company after 10 PM |
+| In bloom | See the plant flower (a week of uptime) |
+| Holiday spirit | Visit on a holiday |
+| The whole gang | Have five pals visit at once |
+| After the heat | See a rainbow after a hot spell |
+
 **It grows up.** As your days together add up, the pet changes: a bushier leaf `\\\|///` at 7 days, more seeds on its body at 30, and golden leaves at 100. The first time you open it after it reaches a new look it says "look, I grew!", and the `?` page has a "Growing" line with the next one. Holiday hats still go where the leaf is.
 
 **Pet it:** press `p` in the live view and it's happy for 3 seconds: `^‿^` face, a little hop, and red `<3` hearts floating up.
@@ -137,7 +152,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-249 standard-library tests, no sensors needed. They check:
+258 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -164,6 +179,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
+- badges: each one's condition, announcements one at a time after the opening line, awarding each badge once, petting coming first, no badges without memories, never changing the shared defaults, keeping the first date earned when saving, dropping damaged entries, and the `?` page's list
 - growing up: days together and the four looks (and their boundaries), every mood's lines staying aligned at every look, hats still winning, "look, I grew!" only the first time, remembering the look it showed off, the "Growing" line, and `--once` reading the memories without writing them
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster

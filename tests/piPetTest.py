@@ -1648,7 +1648,7 @@ class MemoriesTest(unittest.TestCase):
 
     def test_save_and_load(self):
         memories = {'first_met': '2026-10-12', 'visits': 3, 'times_petted': 7, 'times_watered': 2, 'shooting_stars_seen': 1,
-                    'last_seen': 123.5, 'growth_seen': 1}
+                    'last_seen': 123.5, 'growth_seen': 1, 'badges': {'stargazer': '2026-10-13'}}
         self.assertTrue(piPet.save_memories(self.path, memories))
         self.assertEqual(piPet.load_memories(self.path), memories)
         self.assertEqual(os.listdir(os.path.dirname(self.path)), ['memories.json'], 'no temporary file left behind')
@@ -1706,6 +1706,109 @@ class MemoriesTest(unittest.TestCase):
         self.assertTrue(any(text == 'Together' for *_, text, _ in cells))
         no_memories = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(), show_help=True)
         self.assertFalse(any(text == 'Together' for *_, text, _ in no_memories))
+
+
+class BadgeTest(unittest.TestCase):
+    TODAY = datetime.date(2026, 10, 15)  # make_vitals' date
+
+    def memories(self, **fields):
+        return {**piPet.DEFAULT_MEMORIES, 'badges': {}, **fields}
+
+    def earned(self, memories=None, pal_count=0, **readings):
+        return piPet.badges_earned(memories or self.memories(), make_vitals(**readings), pal_count, self.TODAY)
+
+    def make_state(self, memories, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=random.Random(0), memories=memories)
+
+    def test_each_badge(self):
+        cases = [
+            ('first_pet', dict(memories=self.memories(times_petted=1))),
+            ('best_friends', dict(memories=self.memories(times_petted=100))),
+            ('green_thumb', dict(memories=self.memories(times_watered=10))),
+            ('stargazer', dict(memories=self.memories(shooting_stars_seen=1))),
+            ('star_collector', dict(memories=self.memories(shooting_stars_seen=100))),
+            ('regular', dict(memories=self.memories(visits=10))),
+            ('one_week', dict(memories=self.memories(first_met='2026-10-08'))),
+            ('night_owl', dict(hour=23.0)),
+            ('in_bloom', dict(uptime_sec=8 * DAY)),
+            ('holiday_spirit', dict(holiday='halloween')),
+            ('whole_gang', dict(pal_count=5)),
+            ('after_the_heat', dict(rainbow=True)),
+        ]
+        for badge_id, setup in cases:
+            with self.subTest(badge=badge_id):
+                self.assertIn(badge_id, self.earned(**setup))
+        self.assertEqual(self.earned(), set(), 'nothing done yet, at noon on an ordinary day')
+        self.assertEqual([badge_id for badge_id, _, _ in piPet.BADGES], [badge_id for badge_id, _ in cases])
+        self.assertNotIn('best_friends', self.earned(self.memories(times_petted=99)))
+
+    def test_new_badges_are_announced_one_at_a_time_after_the_opening_line(self):
+        state = self.make_state(self.memories(times_petted=5, shooting_stars_seen=252))
+        opening = state.saying
+        state.step(0, now=0.0)  # tick 0 reads the sensors and finds three badges
+        self.assertEqual(state.saying, opening, 'the opening line gets its moment first')
+        news = ['new badge: First pet!', 'new badge: Stargazer!', 'new badge: Star collector!']
+        for i, line in enumerate(news, start=1):
+            state.step(i, now=i * piPet.ANNOUNCE_SECONDS)
+            self.assertEqual(state.saying, line)
+        state.step(4, now=4 * piPet.ANNOUNCE_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['content'], 'then back to its usual lines')
+        self.assertEqual(state.unsaved_badges, {'first_pet': '2026-10-15', 'stargazer': '2026-10-15',
+                                                'star_collector': '2026-10-15'})
+
+    def test_badges_are_awarded_once(self):
+        state = self.make_state(self.memories(times_petted=5, badges={'first_pet': '2026-10-14'}))
+        state.step(0, now=0.0)
+        self.assertEqual(state.badge_news, [])
+        self.assertEqual(state.unsaved_badges, {})
+
+    def test_petting_comes_first(self):
+        state = self.make_state(self.memories(times_petted=5))
+        state.step(0, now=0.0)
+        state.press(ord('p'), now=3.0)
+        state.step(1, now=piPet.ANNOUNCE_SECONDS)
+        self.assertIn(state.saying, piPet.SAYINGS['happy'])
+        state.step(2, now=3.0 + piPet.PET_SECONDS)
+        self.assertEqual(state.saying, 'new badge: First pet!')
+
+    def test_not_remembering_means_no_badges(self):
+        state = self.make_state(None, hour=23.0)
+        state.step(0, now=0.0)
+        self.assertEqual((state.badge_news, state.unsaved_badges), ([], {}))
+
+    def test_the_shared_defaults_are_never_changed(self):
+        state = self.make_state(dict(piPet.DEFAULT_MEMORIES), hour=23.0)  # shares DEFAULT_MEMORIES' badges dict
+        state.step(0, now=0.0)
+        self.assertIn('night_owl', state.memories['badges'])
+        self.assertEqual(piPet.DEFAULT_MEMORIES['badges'], {})
+
+    def test_saving_keeps_the_first_date_earned(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'memories.json')
+            piPet.update_memories(path, badges={'stargazer': '2026-10-13'})
+            saved = piPet.update_memories(path, badges={'stargazer': '2026-10-15', 'first_pet': '2026-10-15'})
+            self.assertEqual(saved['badges'], {'stargazer': '2026-10-13', 'first_pet': '2026-10-15'})
+
+    def test_damaged_badges_are_dropped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'memories.json')
+            with open(path, 'w') as f:
+                json.dump({'badges': {'stargazer': '2026-10-13', 'no_such_badge': '2026-10-13', 'first_pet': 'yesterday'}}, f)
+            self.assertEqual(piPet.load_memories(path)['badges'], {'stargazer': '2026-10-13'})
+            with open(path, 'w') as f:
+                json.dump({'badges': ['stargazer']}, f)
+            self.assertEqual(piPet.load_memories(path)['badges'], {})
+
+    def test_help_lists_the_badges_and_the_next_one(self):
+        self.assertEqual(piPet.describe_badges(self.memories()), '0 of 12 (next: First pet, pet it once)')
+        two = self.memories(badges={'stargazer': '2026-10-13', 'first_pet': '2026-10-14'})
+        self.assertEqual(piPet.describe_badges(two), '2 of 12: First pet, Stargazer (next: Best friends, pet it 100 times)')
+        everything = self.memories(badges={badge_id: '2026-10-15' for badge_id, _, _ in piPet.BADGES})
+        self.assertTrue(piPet.describe_badges(everything).endswith('(every one!)'))
+        for _, name, how in piPet.BADGES:
+            self.assertTrue(all(is_one_column(char) for char in name + how + piPet.BADGE_SAYING.format(name)))
 
 
 class HelpTest(unittest.TestCase):
