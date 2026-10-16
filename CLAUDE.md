@@ -72,7 +72,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
 
 ## Conventions
 
-- Python code uses snake_case (PEP 8). File names are camelCase (`piPet.py`, `piPetTest.py`) to match the owner's standards. The owner's standards say camelCase for functions and variables too; snake_case was kept on purpose, and the question is still open.
+- Python code uses snake_case (PEP 8). File names are camelCase (`piPet.py`, `piPetTest.py`) to match the owner's standards. The owner's standards say camelCase for functions and variables too, but for this Python project the owner decided to keep snake_case (PR #1 comment, Oct 13 2026).
 - Commit messages are plain-English, imperative, and under 72 characters (e.g. "Add a potted plant that grows with the Pi's uptime").
 - The README documents every mood, pal, data source and the test count. Keep it in sync with code changes (moods table, Friends table, "Where the data comes from" table, the test list and count).
 - The AdGuard guard reads only the process name `AdGuardHome`, checks that the install paths exist, and checks for a UDP socket bound to port 53 in `/proc/net/udp6` (`is_udp_port_bound`; never sends a query). Don't read AdGuard's config (root-only) or call its API (needs the owner's admin login). Don't stop the service to test the sleeping guard, because the owner's desktop uses it for DNS; use `make_vitals(adguard_running=False)` instead.
