@@ -1575,7 +1575,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     if show_help:
         add(1, 2, "Pi Pet: what you're looking at", 'leaf')
         row = 3
-        for label, text, color in build_help(vitals, mood, memories):
+        for label, text, color in build_help(vitals, mood, memories, vitals.now.date()):
             add(row, 2, label, 'dim')
             for line in textwrap.wrap(text, width - 13):  # long lines wrap under their own text
                 add(row, 12, line, color)
