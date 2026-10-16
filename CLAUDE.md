@@ -43,7 +43,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
   - **When space runs out, things drop in this order:** trend row, scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
-    - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude.
+    - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude. `build_pals()` returns `(name, lines, color)`, and `pals_that_fit()` keeps as many as fit (`PAL_GAP` apart), with the last spot taking turns among the rest every `PAL_TURN_TICKS`.
     - The plant sits at `PLANT_OFFSET` (24) to the right, and the Halloween jack-o'-lantern at `PUMPKIN_OFFSET` (31). While watering (`layout(..., watering=True)`), the can hangs in pet rows 0-1 with its spout at the plant's middle column, and drops fall from it to the plant's top.
     - Pals and the plant stand on the pet's lowest row (`feet_row`), just above the ground.
     - Nothing goes in the bubble's rows. That was a real bug once.

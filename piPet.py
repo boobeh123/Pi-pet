@@ -242,6 +242,8 @@ PLANT_STAGES = [
     (3, [('  v  ', 'leaf'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # leafy
     (7, [(' (@) ', 'berry'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # in flower
 ]
+PAL_GAP = 1  # columns between pals
+PAL_TURN_TICKS = FPS * 10  # when more pals visit than fit, the farthest spot changes hands this often
 PLANT_STAGE_NAMES = ['sprout', 'seedling', 'leafy', 'in flower']
 PLANT_OFFSET = 24  # columns from the pet's left edge, past the Zs, cloud and hearts
 
@@ -1134,7 +1136,7 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
 
 
 def build_pals(vitals, tick, mood):
-    """The pals visiting right now, nearest the pet first, as (lines, color) for this frame.
+    """The pals visiting right now, nearest the pet first, as (name, lines, color) for this frame.
 
     They line up by how permanent they are (guard, doctor, then Claude), so the ones that come and go
     don't make the others move, and a narrow window drops the most fleeting first. While the pet is
@@ -1143,23 +1145,40 @@ def build_pals(vitals, tick, mood):
     cheering = mood == 'happy'
     pals = []
     if vitals.adguard_running and vitals.dns_answering is False:
-        pals.append((GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
+        pals.append(('guard', GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
     elif vitals.adguard_running:
         frame = GUARD_CHEERING if cheering else GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)]  # a glance every second
-        pals.append((frame, 'guard'))
+        pals.append(('guard', frame, 'guard'))
     elif vitals.adguard_running is False:
-        pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
+        pals.append(('guard', GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
     if vitals.pi_vitals_running:
         if cheering:
-            pals.append((DOCTOR_CHEERING, 'doctor'))
+            pals.append(('doctor', DOCTOR_CHEERING, 'doctor'))
         elif mood in URGENT_MOODS:
-            pals.append((DOCTOR_WORRIED, 'doctor'))
+            pals.append(('doctor', DOCTOR_WORRIED, 'doctor'))
         else:
-            pals.append((DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
+            pals.append(('doctor', DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
     if vitals.claude_here:
         twinkle_ticks = 2 if cheering else 4  # twinkles about once a second, twice as fast when cheering
-        pals.append((CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
+        pals.append(('claude', CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
     return pals
+
+
+def pals_that_fit(pals, room, tick):
+    """The pals that fit in `room` columns, nearest first. When more visit than fit, the farthest spot
+    takes turns among the rest, changing every PAL_TURN_TICKS, so everyone gets some time on screen."""
+    fit = 0
+    used = 0
+    for _, lines, _ in pals:
+        width = len(lines[0]) + (PAL_GAP if fit else 0)
+        if used + width > room:
+            break
+        used += width
+        fit += 1
+    if fit == 0 or fit >= len(pals):
+        return pals[:fit]
+    waiting = pals[fit - 1:]  # the pal in the last spot and everyone who didn't fit share that spot
+    return pals[:fit - 1] + [waiting[tick // PAL_TURN_TICKS % len(waiting)]]
 
 
 def plant_stage(uptime_sec):
@@ -1437,16 +1456,14 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     drawn_top = pet_top + (0 if not bounced else -1 if show_scene else 1)
     for i, (text, color) in enumerate(pet):
         add(drawn_top + i, left, text, color)
-    # Pals stand to the pet's left with their feet level with its feet, as many as fit
+    # Pals stand to the pet's left with their feet level with its feet, as many as fit (taking turns if not)
     feet_row = pet_top + pet_height - 1
     pal_right = left - 2
-    for lines, color in build_pals(vitals, tick, mood):
+    for _, lines, color in pals_that_fit(build_pals(vitals, tick, mood), pal_right, tick):
         pal_left = pal_right - len(lines[0])
-        if pal_left < 0:
-            break
         for i, line in enumerate(lines):
             add(feet_row - len(lines) + 1 + i, pal_left, line, color)
-        pal_right = pal_left - 2
+        pal_right = pal_left - PAL_GAP
 
     # The plant stands to the pet's right, past the extras, when there's room
     plant = build_plant(vitals.uptime_sec)

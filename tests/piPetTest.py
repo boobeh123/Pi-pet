@@ -461,11 +461,14 @@ class GuardTest(unittest.TestCase):
         self.assertTrue(claude_cols, 'both pals should fit at 80 columns')
         self.assertLess(max(claude_cols), min(col for _, col, _, _ in guard))
 
-    def test_guard_gets_the_only_spot(self):
-        # 40 columns: room for one pal beside the pet
-        cells, guard = self.guard_cells(True, claude_here=True, height=20, width=40)
-        self.assertTrue(guard)
-        self.assertFalse([cell for cell in cells if cell[3] == 'claude'])
+    def test_a_lone_spot_takes_turns(self):
+        # 34 columns: room for one pal beside the pet, shared by the guard and Claude
+        def visitor(tick):
+            cells, guard = self.guard_cells(True, claude_here=True, height=20, width=34, tick=tick)
+            return 'guard' if guard else 'claude' if any(cell[3] == 'claude' for cell in cells) else None
+        self.assertEqual(visitor(1), 'guard')
+        self.assertEqual(visitor(piPet.PAL_TURN_TICKS + 1), 'claude')
+        self.assertEqual(visitor(2 * piPet.PAL_TURN_TICKS + 1), 'guard')
 
     def test_pet_thanks_the_guard_only_while_on_watch(self):
         rng = random.Random(2)
@@ -1766,6 +1769,24 @@ class HelpTest(unittest.TestCase):
     def test_short_key_hint_in_a_narrow_window(self):
         cells = piPet.layout(piPet.MIN_HEIGHT + 4, piPet.MIN_WIDTH, 'content', 1, 'hi', make_vitals())
         self.assertIn('p pet · ? help · q quit', [text for *_, text, _ in cells])
+
+
+class PalTurnsTest(unittest.TestCase):
+    PALS = [(name, ['12345'] * 3, 'plain') for name in ('a', 'b', 'c', 'd')]
+
+    def names(self, room, tick=0):
+        return [name for name, _, _ in piPet.pals_that_fit(self.PALS, room, tick)]
+
+    def test_everyone_fits(self):
+        self.assertEqual(self.names(5 * 4 + piPet.PAL_GAP * 3), ['a', 'b', 'c', 'd'])
+
+    def test_the_last_spot_takes_turns(self):
+        room = 5 * 2 + piPet.PAL_GAP  # two spots
+        turns = [self.names(room, tick=turn * piPet.PAL_TURN_TICKS) for turn in range(4)]
+        self.assertEqual(turns, [['a', 'b'], ['a', 'c'], ['a', 'd'], ['a', 'b']])
+
+    def test_no_room(self):
+        self.assertEqual(self.names(4), [])
 
 
 class CheerTest(unittest.TestCase):
