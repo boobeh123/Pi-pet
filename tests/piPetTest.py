@@ -7,9 +7,9 @@ import datetime
 import io
 import json
 import os
-import tempfile
 import random
 import sys
+import tempfile
 import unicodedata
 import unittest
 from pathlib import Path
@@ -26,7 +26,9 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026):
+                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
+                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
+                load_history=()):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -50,6 +52,11 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.dns_answering = dns_answering
     vitals.holiday = holiday
     vitals.year = year
+    vitals.now = now
+    vitals.wifi_dbm = wifi_dbm
+    vitals.busiest = busiest
+    vitals.temp_history = list(temp_history)
+    vitals.load_history = list(load_history)
     return vitals
 
 
@@ -141,7 +148,9 @@ class LayoutTest(unittest.TestCase):
 
     def all_layouts(self, sizes=SIZES):
         # With both pals and the plant in flower (its tallest), wherever there's room
-        vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY)
+        vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY,
+                             wifi_dbm=-60,  # the longest status line, with signal bars
+                             temp_history=[55.0] * 300, load_history=[1.0] * 300)  # and the trend row
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -283,7 +292,8 @@ class SceneTest(unittest.TestCase):
                                                          day_of_year=tick * 15,
                                                          adguard_running=tick % 2 == 0,  # guard awake or asleep
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
-                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)]),
+                                                         holiday=HOLIDAYS[tick % len(HOLIDAYS)],
+                                                         load_history=[1.0] * (300 if tick % 2 else 0)),
                                              watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -352,14 +362,18 @@ class ClaudePalTest(unittest.TestCase):
             name = names[paths.index(path)]
             if name is None:
                 raise FileNotFoundError(path)  # the process ended while we looked
-            return io.StringIO(name + '\n')
+            pid = path.split('/')[2]
+            return io.StringIO(f'{pid} ({name}) S 1 1 1 0 -1 4194560 100 0 0 0 7 3 0 0 20 0 1 0 50 0 0\n')
 
-        return mock.patch.object(piPet.glob, 'glob', return_value=paths), mock.patch('builtins.open', side_effect=fake_open)
+        return (mock.patch.object(piPet.glob, 'glob', return_value=[path.replace('comm', 'stat') for path in paths]),
+                mock.patch('builtins.open', side_effect=lambda path, *a, **k: fake_open(path.replace('stat', 'comm'))))
 
-    def test_reads_process_names(self):
+    def test_reads_every_process_name(self):
         patch_glob, patch_open = self.fake_processes(['bash', None, 'claude', 'AdGuardHome'])
         with patch_glob, patch_open:
-            self.assertEqual(piPet.read_process_names(), {'bash', 'claude', 'AdGuardHome'})
+            processes = piPet.read_process_ticks()
+        self.assertEqual({name for name, _, _ in processes.values()}, {'bash', 'claude', 'AdGuardHome'})
+        self.assertEqual({ticks for _, ticks, _ in processes.values()}, {10}, 'user time 7 + system time 3')
 
     def test_pal_frames_line_up(self):
         for frame in piPet.CLAUDE_PAL:
@@ -845,6 +859,189 @@ class HolidayTest(unittest.TestCase):
         holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
         self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
         self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
+
+
+SAMPLE_WIRELESS = """\
+Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE
+ face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22
+ wlan0: 0000   70.  -22.  -256        0      0      0      5      0        0
+"""
+
+
+def stat_line(pid, name, ticks=10, parent=1, started=50):
+    """A /proc/<pid>/stat line with the fields Pi Pet reads: parent pid, user + system time, start time."""
+    return f'{pid} ({name}) S {parent} 1 1 0 -1 4194560 100 0 0 0 {ticks - 3} 3 0 0 20 0 1 0 {started} 0 0\n'
+
+
+class BusiestTest(unittest.TestCase):
+    def read(self, stats):
+        """read_process_ticks over fake /proc/<pid>/stat files, given {pid: stat line}."""
+        paths = {f'/proc/{pid}/stat': line for pid, line in stats.items()}
+        with mock.patch.object(piPet.glob, 'glob', return_value=list(paths)), \
+                mock.patch('builtins.open', side_effect=lambda path, *a, **k: io.StringIO(paths[path])):
+            return piPet.read_process_ticks()
+
+    def test_reads_names_with_spaces_and_parentheses(self):
+        processes = self.read({10: stat_line(10, 'Web Content', 25), 11: stat_line(11, 'odd) name', 5, started=60)})
+        self.assertEqual(processes, {10: ('Web Content', 25, 50), 11: ('odd) name', 5, 60)})
+
+    def test_leaves_out_kernel_threads_and_pi_pet_itself(self):
+        own = os.getpid()
+        processes = self.read({2: stat_line(2, 'kthreadd', parent=0), 99: stat_line(99, 'kworker/u16:1-v3d_render', parent=2),
+                               own: stat_line(own, 'python3'), 300: stat_line(300, 'code')})
+        self.assertEqual(list(processes), [300])
+
+    def test_busiest_adds_up_a_programs_processes(self):
+        before = {1: ('code', 100, 5), 2: ('code', 50, 5), 3: ('Web Content', 10, 7), 4: ('firefox', 10, 7)}
+        after = {1: ('code', 130, 5), 2: ('code', 60, 5), 3: ('Web Content', 40, 7), 4: ('firefox', 25, 7)}
+        # VS Code used 30 + 10 = 40 ticks; Firefox used 30 + 15 = 45 ticks, over 2 seconds
+        name, percent = piPet.busiest_process(before, after, seconds=2.0)
+        self.assertEqual(name, 'Firefox')
+        self.assertAlmostEqual(percent, 45 / piPet.CLOCK_TICKS_PER_SECOND / 2.0 * 100)
+
+    def test_a_renamed_process_is_not_new_but_a_reused_pid_is(self):
+        before = {1: ('kworker/a', 10_000, 5), 2: ('bash', 10_000, 5)}
+        renamed = {1: ('worker-b', 10_010, 5), 2: ('bash', 10_000, 5)}  # same start time: only 10 ticks used
+        self.assertAlmostEqual(piPet.busiest_process(before, renamed, 1.0)[1], 10 / piPet.CLOCK_TICKS_PER_SECOND * 100)
+        reused = {1: ('make', 40, 9), 2: ('bash', 10_000, 5)}  # a new process got pid 1: all 40 ticks are new
+        self.assertEqual(piPet.busiest_process(before, reused, 1.0)[0], 'make')
+
+    def test_nothing_busy_is_none(self):
+        self.assertIsNone(piPet.busiest_process({1: ('bash', 10, 5)}, {1: ('bash', 10, 5)}, 2.0))
+        self.assertIsNone(piPet.busiest_process({}, {}, 2.0))
+        self.assertIsNone(piPet.busiest_process({1: ('bash', 10, 5)}, {1: ('bash', 20, 5)}, 0))
+
+    def test_readings_too_close_together_are_skipped(self):
+        vitals = object.__new__(piPet.Vitals)
+        vitals.process_ticks, vitals.process_time, vitals.busiest = None, None, None
+        readings = [{1: ('code', 0, 5)}, {1: ('code', 100, 5)}, {1: ('code', 300, 5)}]
+        with mock.patch.object(piPet, 'read_process_ticks', side_effect=readings), \
+                mock.patch.object(piPet.time, 'monotonic', side_effect=[10.0, 10.1, 12.0]):
+            vitals.update_busiest()
+            self.assertIsNone(vitals.busiest, 'nothing to compare with yet')
+            vitals.update_busiest()
+            self.assertIsNone(vitals.busiest, '0.1 seconds is too close')
+            vitals.update_busiest()
+        self.assertEqual(vitals.busiest, ('VS Code', 300 / piPet.CLOCK_TICKS_PER_SECOND / 2.0 * 100))
+
+    def test_the_pet_says_who_is_keeping_it_busy(self):
+        busy = make_vitals(load=2.5, busiest=('Firefox', 85.0))
+        said = {piPet.pick_saying('busy', busy, random.Random(8)) for _ in range(50)}
+        self.assertIn('Firefox is keeping me busy!', said)
+        self.assertIn('mostly Firefox', piPet.explain_mood(busy, 'busy'))
+        help_lines = {label: text for label, text, _ in piPet.build_help(busy, 'busy')}
+        self.assertEqual(help_lines['Busiest'], f'Firefox, 85% of one core (of {os.cpu_count()})')
+        self.assertNotIn('Busiest', {label for label, _, _ in piPet.build_help(make_vitals(), 'content')})
+
+
+class TrendTest(unittest.TestCase):
+    def test_sparkline_heights(self):
+        self.assertEqual(piPet.sparkline([40] * 8, 4, 40, 80), '⣀⣀⣀⣀', 'lowest values still show a dot')
+        self.assertEqual(piPet.sparkline([80] * 8, 4, 40, 80), '⣿⣿⣿⣿')
+        self.assertEqual(piPet.sparkline([90, 20], 1, 40, 80), '⣇', 'out-of-range values are clamped (4 dots, then 1)')
+
+    def test_short_history_sits_on_the_right(self):
+        line = piPet.sparkline([60] * 4, 10, 40, 80, slots=300)
+        self.assertEqual(len(line), 10)
+        self.assertEqual(line[:-1], chr(0x2800) * 9, 'blank Braille where there is no history yet')
+        self.assertNotEqual(line[-1], chr(0x2800))
+
+    def test_a_full_history_fills_the_line(self):
+        line = piPet.sparkline([60] * 300, 20, 40, 80, slots=300)
+        self.assertNotIn(chr(0x2800), line)
+
+    def test_sparklines_are_one_column(self):
+        for char in piPet.sparkline(list(range(40, 81)), 20, 40, 80) + chr(0x2800):
+            self.assertTrue(is_one_column(char), f'{char!r} {unicodedata.east_asian_width(char)}')
+
+    def test_trend_needs_history_and_room(self):
+        self.assertEqual(piPet.build_trend(make_vitals(load_history=[1.0] * 3), 80), [], 'a --once snapshot has 2 readings')
+        self.assertEqual(piPet.build_trend(make_vitals(load_history=[1.0] * 50), 30), [], 'too narrow')
+        pieces = piPet.build_trend(make_vitals(temp_history=[55.0] * 50, load_history=[1.0] * 50), 80)
+        texts = [text for _, text, _ in pieces]
+        self.assertEqual(texts[0], 'temp ')
+        self.assertIn('load ', texts)
+        self.assertEqual(texts[-1], '  10 min')
+        for (col, text, _), (next_col, _, _) in zip(pieces, pieces[1:]):
+            self.assertEqual(col + len(text), next_col, 'the pieces sit side by side')
+        only_load = piPet.build_trend(make_vitals(load_history=[1.0] * 50), 80)
+        self.assertNotIn('temp ', [text for _, text, _ in only_load], 'no temperature sensor, no temperature line')
+
+    def test_trend_row_sits_under_the_status_line(self):
+        cells = piPet.layout(24, 80, 'content', 1, 'hi', make_vitals(temp_history=[55.0] * 50, load_history=[1.0] * 50))
+        status_row = next(row for row, _, text, _ in cells if text.startswith('temp ') and '·' in text)
+        trend_rows = {row for row, _, text, _ in cells if text == '  10 min'}
+        self.assertEqual(trend_rows, {status_row + 1})
+
+    def test_the_scene_wins_over_the_trend_in_a_tight_window(self):
+        history = dict(temp_history=[55.0] * 50, load_history=[1.0] * 50)
+        def shows(height):
+            cells = piPet.layout(height, 80, 'content', 1, 'hi', make_vitals(**history))
+            return (any(color == 'grass' for *_, color in cells), any(text == '  10 min' for *_, text, _ in cells))
+        tight = next(height for height in range(12, 30) if shows(height)[0])
+        self.assertEqual(shows(tight), (True, False), 'the first height with a scene has no room for the trend')
+        self.assertEqual(shows(tight + 1), (True, True))
+
+
+class WifiTest(unittest.TestCase):
+    def test_reads_the_signal_for_one_interface(self):
+        with fake_file(SAMPLE_WIRELESS):
+            self.assertEqual(piPet.read_wifi_dbm('wlan0'), -22.0)
+        with fake_file(SAMPLE_WIRELESS):
+            self.assertIsNone(piPet.read_wifi_dbm('eth0'), 'wired interfaces have no signal')
+        with fake_file(SAMPLE_WIRELESS.replace('-22.', '0.')):
+            self.assertIsNone(piPet.read_wifi_dbm('wlan0'), 'a driver without a dBm reading')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertIsNone(piPet.read_wifi_dbm('wlan0'))
+
+    def test_bars_like_a_phone(self):
+        cases = [(-22, 4, '||||'), (-55, 4, '||||'), (-56, 3, '|||.'), (-70, 2, '||..'), (-80, 1, '|...'), (-90, 0, '....')]
+        for dbm, bars, text in cases:
+            with self.subTest(dbm=dbm):
+                self.assertEqual(piPet.wifi_bars(dbm), bars)
+                self.assertEqual(piPet.format_wifi_bars(dbm), text)
+        self.assertEqual(piPet.format_wifi_bars(None), '')
+
+    def test_status_line_shows_the_bars(self):
+        self.assertIn('wlan0 |||. 0.0 KB/s', piPet.build_status(make_vitals(wifi_dbm=-60)))
+        self.assertIn('wlan0 0.0 KB/s', piPet.build_status(make_vitals()), 'no bars without a Wi-Fi reading')
+
+    def test_weak_signal_brings_an_alert_and_some_fretting(self):
+        weak = make_vitals(wifi_dbm=-80)
+        self.assertIn('weak Wi-Fi (-80 dBm)', piPet.build_alerts(weak))
+        self.assertNotIn('Wi-Fi', piPet.build_alerts(make_vitals(wifi_dbm=-70)))
+        rng = random.Random(7)
+        said = {piPet.pick_saying('content', weak, rng) for _ in range(200)}
+        self.assertTrue(said & set(piPet.WEAK_WIFI_SAYINGS))
+
+    def test_help_describes_the_network(self):
+        self.assertEqual(piPet.describe_network(make_vitals(wifi_dbm=-22, net_rate=1024)),
+                         'wlan0: 1.0 KB/s, signal -22 dBm (excellent)')
+        self.assertIn('no route', piPet.describe_network(make_vitals(online=False)))
+        labels = [label for label, _, _ in piPet.build_help(make_vitals(), 'content')]
+        self.assertIn('Network', labels)
+
+
+class ClockTest(unittest.TestCase):
+    def test_format_clock(self):
+        cases = [((2026, 10, 15, 0, 5), 'Thu Oct 15  12:05 AM'), ((2026, 10, 15, 9, 7), 'Thu Oct 15  9:07 AM'),
+                 ((2026, 10, 15, 12, 0), 'Thu Oct 15  12:00 PM'), ((2026, 12, 31, 23, 59), 'Thu Dec 31  11:59 PM')]
+        for parts, text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(piPet.format_clock(datetime.datetime(*parts)), text)
+
+    def clock_cells(self, width, show_hint=True):
+        cells = piPet.layout(24, width, 'content', 1, 'hi', make_vitals(), show_hint=show_hint)
+        return [(row, col, text) for row, col, text, _ in cells if text == 'Thu Oct 15  8:42 PM']
+
+    def test_clock_in_the_bottom_right_corner(self):
+        [(row, col, text)] = self.clock_cells(80)
+        self.assertEqual(row, 24 - 2)
+        self.assertEqual(col + len(text), 80 - 2)
+
+    def test_no_clock_without_room_or_in_a_snapshot(self):
+        self.assertEqual(self.clock_cells(40), [], 'no room beside the key hint')
+        self.assertEqual(self.clock_cells(80, show_hint=False), [], '--once has no bottom bar')
 
 
 class WaterTest(unittest.TestCase):
@@ -1507,7 +1704,8 @@ class NetRateTest(unittest.TestCase):
     def test_startup_does_not_spike(self):
         # One 1500-byte packet between the two readings at startup used to read as ~30 MB/s
         with mock.patch.object(piPet.time, 'monotonic', side_effect=[100.0, 100.00005]), \
-                mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]):
+                mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]), \
+                mock.patch.object(piPet.Vitals, 'update_busiest', return_value={}):  # it reads the clock too
             vitals = piPet.Vitals(interface='wlan0')
         self.assertEqual(vitals.net_rate, 0)
         self.assertNotEqual(vitals.mood(), 'surfing')

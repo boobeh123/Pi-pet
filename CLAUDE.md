@@ -11,7 +11,7 @@ python3 piPet.py                       # live view (p to pet, w to water, ? for 
 python3 piPet.py --once --mood dizzy   # print a snapshot and exit; --mood forces any key of FACES
 python3 piPet.py --iface eth0          # watch one interface instead of following the default route
 
-python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~10 s)
+python3 -m unittest discover -s tests -p "*Test.py"                # all tests (~11 s)
 python3 -m unittest discover -s tests -p "*Test.py" -k SceneTest   # one class
 python3 -m unittest discover -s tests -p "*Test.py" -k test_status_line_always_shows   # one test
 ```
@@ -32,14 +32,15 @@ script -q -c "stty cols 80 rows 24; TERM=xterm-256color timeout --foreground 2 p
 
 The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → curses**.
 
-- **Readers** (`read_*`, `get_default_interface`, `read_process_names`, `is_adguard_installed`) read `/sys`, `/proc` and `os.statvfs` directly. Each returns `None` when its source is missing, and a `None` reading must never trigger a mood or alert. The project runs on non-Pi machines, where every sensor is missing.
+- **Readers** (`read_*`, `get_default_interface`, `is_adguard_installed`; `read_process_ticks` is the one pass over `/proc/<pid>/stat` that gives both the process names for the pals and the CPU time for `busiest_process`, keyed by pid plus start time and leaving out kernel threads) read `/sys`, `/proc` and `os.statvfs` directly. Each returns `None` when its source is missing, and a `None` reading must never trigger a mood or alert. The project runs on non-Pi machines, where every sensor is missing.
 - **`Vitals`** refreshes every reading on each `refresh()`, which happens every 2 s in the live loop.
   - Network speed comes from `update_net_rate()`. It skips readings closer than `MIN_RATE_SECONDS`, and it resets the measurement when the default-route interface changes.
   - `mood()` is an ordered priority chain: dizzy > hot > stuffed > hungry > groggy > lonely > busy > surfing > sleepy > content. `happy` exists only for petting and `--mood`; the sensors never pick it.
 - **Builders** (`build_pet`, `build_extras`, `build_pals`, `build_plant`, `build_sky`, `build_bubble`, `build_status`, `build_alerts`) return text, or cells *relative to the pet's top-left corner*. They never know the window size, except `build_sky` and `build_ground`, which span the full width.
 - **`layout(height, width, mood, tick, saying, vitals)`** is a pure function that returns `(row, col, text, color)` cells, all clipped to the window. All placement logic lives here. `run_live` paints the cells with curses, and `print_once` turns them into text with `render_lines()` (at the terminal's size capped to 80×24, without the key hint). Testing the drawing means calling `layout()`, never curses. A new color needs an entry in both `curses_colors()` and `ANSI_COLORS`; a test checks the ANSI side.
   - **`show_help=True`** replaces the whole scene with the help page from `build_help()` (labels plus `explain_mood`, `describe_sky`, `describe_pals`, `describe_plant`, wrapped with `textwrap`). New scene features should get a line there too.
-  - **When space runs out, things drop in this order:** scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
+  - **The trend row** (`build_trend`: Braille sparklines of `vitals.temp_history`/`load_history`) sits under the status line and is the first thing to go: it shows only when it fits along with everything else, scene included. Braille (U+2800-28FF) is East Asian width `N`, so it passes the one-column rule; block elements like `▁█` are `A` and don't.
+  - **When space runs out, things drop in this order:** trend row, scene (sky and ground; needs ≥40 columns and room for everything else), then the alert line, then the bubble, then the quit hint. Pals and the plant appear only if they fit horizontally. Below `MIN_WIDTH`×`MIN_HEIGHT` (24×11), only "window too small" is shown.
   - **Fixed zones around the pet**, which is 13 columns wide (`PET_WIDTH`):
     - Extras (Zs, rain cloud, dizzy stars, hearts) stay in pet rows 0–5, right of the body, at most column 21.
     - Pals line up to the left by how permanent they are: the guard nearest, then the doctor, then Claude.
@@ -47,6 +48,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
     - Pals and the plant stand on the pet's lowest row (`feet_row`), just above the ground.
     - Nothing goes in the bubble's rows. That was a real bug once.
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
+  - The live view's bottom bar (`show_hint`) has the key hint on the left and the clock (`format_clock(vitals.now)`) on the right when it fits.
   - Nothing is drawn on the bottom row or in the last column. curses raises an error when writing the bottom-right corner.
 - **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
   - `press(key, now)` handles keys (p pets, w waters for `WATER_SECONDS`, ? or h toggles `show_help`) and returns False to quit;
@@ -72,7 +74,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
 
 ## Conventions
 
-- Python code uses snake_case (PEP 8). File names are camelCase (`piPet.py`, `piPetTest.py`) to match the owner's standards. The owner's standards say camelCase for functions and variables too; snake_case was kept on purpose, and the question is still open.
+- Python code uses snake_case (PEP 8). File names are camelCase (`piPet.py`, `piPetTest.py`) to match the owner's standards. The owner's standards say camelCase for functions and variables too, but for this Python project the owner decided to keep snake_case (PR #1 comment, Oct 13 2026).
 - Commit messages are plain-English, imperative, and under 72 characters (e.g. "Add a potted plant that grows with the Pi's uptime").
 - The README documents every mood, pal, data source and the test count. Keep it in sync with code changes (moods table, Friends table, "Where the data comes from" table, the test list and count).
 - The AdGuard guard reads only the process name `AdGuardHome`, checks that the install paths exist, and checks for a UDP socket bound to port 53 in `/proc/net/udp6` (`is_udp_port_bound`; never sends a query). Don't read AdGuard's config (root-only) or call its API (needs the owner's admin login). Don't stop the service to test the sleeping guard, because the owner's desktop uses it for DNS; use `make_vitals(adguard_running=False)` instead.

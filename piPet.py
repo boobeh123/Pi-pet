@@ -9,6 +9,7 @@
 """
 
 import argparse
+import collections
 import curses
 import datetime
 import glob
@@ -116,6 +117,10 @@ BUSY_LOAD = 2.0
 SURF_BYTES_PER_SEC = 200 * 1024
 SLEEPY_LOAD = 0.3
 SLEEPY_BYTES_PER_SEC = 5 * 1024
+WIFI_BAR_DBM = (-55, -65, -75, -85)  # Wi-Fi signal: 4 bars at -55 dBm or stronger, 3 at -65, 2 at -75, 1 at -85
+WEAK_WIFI_BARS = 1  # this many bars or fewer, and the pet frets
+WIFI_BAR_WORDS = ['very weak', 'weak', 'fair', 'good', 'excellent']
+WEAK_WIFI_SAYINGS = ['the Wi-Fi feels far away', 'can you hear me now?']
 STUFFED_DISK_PERCENT = 90   # SD card this full or more
 HUNGRY_MEMORY_PERCENT = 10  # less memory than this still available
 GROGGY_UPTIME_SEC = 5 * 60  # booted less than this long ago
@@ -127,6 +132,21 @@ WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
+HISTORY_SAMPLES = 300  # readings kept for the trend sparklines: 10 minutes at one every 2 seconds
+MIN_TREND_SAMPLES = 4  # fewer than this (a --once snapshot, say) and there's no trend to draw
+TEMP_TREND_RANGE = (40, 80)  # °C from the bottom to the top of the temperature sparkline
+TREND_WIDTH = 20  # characters per sparkline, two time slices each
+# Braille dots from the bottom up, for the left and right halves of a character
+LEFT_DOTS = (0x40, 0x04, 0x02, 0x01)
+RIGHT_DOTS = (0x80, 0x20, 0x10, 0x08)
+CLOCK_TICKS_PER_SECOND = os.sysconf('SC_CLK_TCK')  # the unit of CPU time in /proc/<pid>/stat (100 on Linux)
+BUSY_SAYING = '{} is keeping me busy!'
+BUSY_SAYING_CHANCE = 1 / 2
+FIREFOX_PROCESS_NAMES = ('firefox', 'firefox-esr', 'Web Content', 'Isolated Web Co', 'WebExtensions', 'Privileged Cont',
+                         'RDD Process', 'Socket Process', 'Utility Process', 'GPU Process')  # Firefox's many processes
+FRIENDLY_PROCESS_NAMES = {'code': 'VS Code', 'chromium': 'Chromium', 'claude': 'Claude', 'node': 'Node',
+                          'python3': 'Python', 'AdGuardHome': 'AdGuard', 'mongod': 'MongoDB',
+                          **{name: 'Firefox' for name in FIREFOX_PROCESS_NAMES}}
 
 # Faces: (left eye, right eye, mouth). Every character must be exactly one terminal column wide,
 # so no emoji or East Asian wide characters, or the body falls out of alignment.
@@ -251,6 +271,38 @@ def read_net_bytes(interface):
     return None
 
 
+def read_wifi_dbm(interface):
+    """Wi-Fi signal strength in dBm for a wireless interface (from /proc/net/wireless), or None for a
+    wired interface, a missing one, or a driver that doesn't report it."""
+    try:
+        with open('/proc/net/wireless') as f:
+            for line in f:
+                name, _, fields = line.partition(':')
+                if name.strip() == interface:
+                    level = float(fields.split()[2].rstrip('.'))
+                    return level if level < 0 else None  # 0 or positive means no dBm reading
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def wifi_bars(dbm):
+    """0-4 bars from signal strength in dBm, like a phone."""
+    return sum(dbm >= threshold for threshold in WIFI_BAR_DBM)
+
+
+def format_wifi_bars(dbm):
+    """Signal bars for the status line, like '|||.', or '' without a Wi-Fi reading."""
+    if dbm is None:
+        return ''
+    bars = wifi_bars(dbm)
+    return '|' * bars + '.' * (len(WIFI_BAR_DBM) - bars)
+
+
+def is_wifi_weak(vitals):
+    return vitals.wifi_dbm is not None and wifi_bars(vitals.wifi_dbm) <= WEAK_WIFI_BARS
+
+
 def get_default_interface():
     """The interface that carries the default route (internet traffic), or None.
 
@@ -342,16 +394,50 @@ def holiday_on(month, day):
     return None
 
 
-def read_process_names():
-    """The names of every running process (from /proc/*/comm, so at most 15 characters each)."""
-    names = set()
-    for comm_path in glob.glob('/proc/[0-9]*/comm'):
+def read_process_ticks():
+    """Every running program's processes except Pi Pet itself, as {pid: (name, CPU clock ticks used so far,
+    start time)}, from /proc/<pid>/stat. Names are at most 15 characters, the same as /proc/<pid>/comm.
+
+    Kernel threads (kthreadd, pid 2, and its children) are left out: they aren't programs anyone opened,
+    and kworker threads rename themselves as they switch jobs."""
+    processes = {}
+    own_pid = os.getpid()
+    for stat_path in glob.glob('/proc/[0-9]*/stat'):
         try:
-            with open(comm_path) as f:
-                names.add(f.read().strip())
-        except OSError:
+            with open(stat_path) as f:
+                stat = f.read()
+            pid_text, _, rest = stat.partition(' (')
+            name, _, fields = rest.rpartition(') ')  # the name itself can contain spaces and parentheses
+            fields = fields.split()
+            pid, parent = int(pid_text), int(fields[1])
+            if pid != own_pid and pid != 2 and parent != 2:
+                # user time + system time, and the start time, which tells a process apart from a later one with its pid
+                processes[pid] = (name, int(fields[11]) + int(fields[12]), int(fields[19]))
+        except (OSError, ValueError, IndexError):
             continue  # the process ended while we looked
-    return names
+    return processes
+
+
+def busiest_process(before, after, seconds):
+    """The program that used the most CPU between two readings of read_process_ticks, as (friendly name,
+    percent of one core), adding up all of a program's processes (all of Firefox's, say). None if nothing
+    used 1%."""
+    used = {}
+    for pid, (name, ticks, started) in after.items():
+        earlier = before.get(pid)
+        # A process that's new since the last reading used all of its time in between (a reused pid is new too)
+        start = earlier[1] if earlier and earlier[2] == started else 0
+        program = friendly_name(name)
+        used[program] = used.get(program, 0) + max(0, ticks - start)
+    if not used or seconds <= 0:
+        return None
+    name, ticks = max(used.items(), key=lambda item: item[1])
+    percent = ticks / CLOCK_TICKS_PER_SECOND / seconds * 100
+    return (name, percent) if percent >= 1 else None
+
+
+def friendly_name(process_name):
+    return FRIENDLY_PROCESS_NAMES.get(process_name, process_name)
 
 
 def is_port_listening(port):
@@ -409,6 +495,11 @@ class Vitals:
         self.last_net = read_net_bytes(self.interface)
         self.last_time = time.monotonic()
         self.net_rate = 0
+        self.process_ticks = None  # the last read_process_ticks, for working out the busiest program
+        self.process_time = None
+        self.busiest = None  # (name, percent of one core), once there are two readings to compare
+        self.temp_history = collections.deque(maxlen=HISTORY_SAMPLES)  # for the trend sparklines
+        self.load_history = collections.deque(maxlen=HISTORY_SAMPLES)
         self.refresh()
 
     def refresh(self):
@@ -420,20 +511,38 @@ class Vitals:
         self.disk_used_percent = read_disk_used_percent()
         self.uptime_sec = read_uptime_sec()
         self.online = get_default_interface() is not None
-        processes = read_process_names()
-        self.claude_here = 'claude' in processes  # a Claude Code session, in VS Code or the terminal
+        processes = self.update_busiest()
+        names = {name for name, _, _ in processes.values()}
+        self.claude_here = 'claude' in names  # a Claude Code session, in VS Code or the terminal
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
-        self.adguard_running = 'AdGuardHome' in processes if is_adguard_installed() else None
+        self.adguard_running = 'AdGuardHome' in names if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
         # Only asked while AdGuard runs: is it actually serving DNS? None means "not asked"
         self.dns_answering = is_udp_port_bound(DNS_PORT) if self.adguard_running else None
-        now = time.localtime()
-        self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
+        now = datetime.datetime.now()  # local time, for the clock, the sun and moon, and holidays
+        self.now = now
+        self.hour = now.hour + now.minute / 60
         self.moon_age = moon_age_days(time.time())
-        self.day_of_year = now.tm_yday  # moves the planet a little each night
-        self.year = now.tm_year
-        self.holiday = holiday_on(now.tm_mon, now.tm_mday)
+        self.day_of_year = now.timetuple().tm_yday  # moves the planet a little each night
+        self.year = now.year
+        self.holiday = holiday_on(now.month, now.day)
         self.update_net_rate()
+        self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
+        if self.temp_c is not None:
+            self.temp_history.append(self.temp_c)
+        self.load_history.append(self.load)
+
+    def update_busiest(self):
+        """Read every process's CPU time, and work out the busiest program since the last reading at least
+        MIN_RATE_SECONDS ago (closer readings would turn one tick into a huge percentage). Returns the reading."""
+        now = time.monotonic()
+        processes = read_process_ticks()
+        if self.process_ticks is None:
+            self.process_ticks, self.process_time = processes, now  # nothing to compare with yet
+        elif now - self.process_time >= MIN_RATE_SECONDS:
+            self.busiest = busiest_process(self.process_ticks, processes, now - self.process_time)
+            self.process_ticks, self.process_time = processes, now
+        return processes
 
     def update_net_rate(self):
         """Bytes per second since the last reading that was at least MIN_RATE_SECONDS ago."""
@@ -497,6 +606,11 @@ def format_duration(seconds):
         return f'{seconds // 3600} h {seconds % 3600 // 60} min'
     days = seconds // 86400
     return f'{days} day{"s" if days != 1 else ""} {seconds % 86400 // 3600} h'
+
+
+def format_clock(now):
+    """The live view's clock: 'Wed Oct 15  3:32 PM'."""
+    return f'{now:%a %b} {now.day}  {now.hour % 12 or 12}:{now:%M} {"AM" if now.hour < 12 else "PM"}'
 
 
 def format_rate(bytes_per_sec):
@@ -574,7 +688,53 @@ def build_bubble(text):
 def build_status(vitals):
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
     fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)} rpm'
-    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {vitals.interface} {format_rate(vitals.net_rate)}'
+    signal = format_wifi_bars(vitals.wifi_dbm)
+    network = ' '.join(part for part in (vitals.interface, signal, format_rate(vitals.net_rate)) if part)
+    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {network}'
+
+
+def sparkline(values, width, low, high, slots=None):
+    """A Braille sparkline `width` characters wide, newest on the right. Each character holds two time
+    slots; the full width covers `slots` readings (all of them by default), so a short history leaves
+    the left side blank. Every slot with data shows at least one dot; low and high set the scale."""
+    values = list(values)
+    dots = width * 2
+    per_dot = max(slots or len(values), dots) / dots  # readings per dot (at least one)
+    heights = []
+    for dot in range(dots):
+        start = len(values) - round((dots - dot) * per_dot)
+        end = len(values) - round((dots - 1 - dot) * per_dot)
+        bucket = values[max(0, start):max(0, end)]
+        if bucket:
+            level = (sum(bucket) / len(bucket) - low) / (high - low)
+            heights.append(1 + round(min(1, max(0, level)) * 3))
+        else:
+            heights.append(0)
+    return ''.join(chr(0x2800 + sum(LEFT_DOTS[:left]) + sum(RIGHT_DOTS[:right]))
+                   for left, right in zip(heights[::2], heights[1::2]))
+
+
+def build_trend(vitals, width):
+    """The trend row under the status line: 10-minute sparklines of temperature and load, as
+    (col, text, color) pieces for a window `width` wide, or [] without enough history or room."""
+    if len(vitals.load_history) < MIN_TREND_SAMPLES:
+        return []
+    spark_width = min(TREND_WIDTH, (width - 22) // 2)
+    if spark_width < 6:
+        return []
+    cores = os.cpu_count() or 4
+    pieces = []
+    if len(vitals.temp_history) >= MIN_TREND_SAMPLES:
+        temp = sparkline(vitals.temp_history, spark_width, *TEMP_TREND_RANGE, slots=HISTORY_SAMPLES)
+        pieces += [('temp ', 'dim'), (temp, 'sun'), ('  ', 'dim')]
+    load = sparkline(vitals.load_history, spark_width, 0, cores, slots=HISTORY_SAMPLES)
+    pieces += [('load ', 'dim'), (load, 'extra'), ('  10 min', 'dim')]
+    col = (width - 1 - sum(len(text) for text, _ in pieces)) // 2
+    placed = []
+    for text, color in pieces:
+        placed.append((col, text, color))
+        col += len(text)
+    return placed
 
 
 def build_short_status(vitals):
@@ -599,6 +759,8 @@ def build_alerts(vitals):
         alerts.append('AdGuard stopped')
     elif vitals.adguard_running and vitals.dns_answering is False:
         alerts.append('DNS port 53 closed')
+    if is_wifi_weak(vitals):
+        alerts.append(f'weak Wi-Fi ({vitals.wifi_dbm:.0f} dBm)')
     return '  ·  '.join(alerts)
 
 
@@ -952,7 +1114,8 @@ def explain_mood(vitals, mood):
     if mood == 'lonely':
         return 'no route to the internet'
     if mood == 'busy':
-        return f'1-minute load {vitals.load:.2f} ({BUSY_LOAD} or more)'
+        busiest = f', mostly {vitals.busiest[0]}' if vitals.busiest else ''
+        return f'1-minute load {vitals.load:.2f} ({BUSY_LOAD} or more){busiest}'
     if mood == 'surfing':
         return f'{format_rate(vitals.net_rate)} on {vitals.interface} ({SURF_BYTES_PER_SEC // 1024} KB/s or more)'
     if mood == 'sleepy':
@@ -973,6 +1136,14 @@ def describe_sky(vitals):
         return f'day: the sun, {weather}'
     phase = MOON_PHASE_NAMES[moon_eighth(vitals.moon_age)]
     return f'night: {phase} (day {vitals.moon_age:.1f} of 29.5), a ringed planet, the odd shooting star'
+
+
+def describe_network(vitals):
+    """The network in words: interface, speed, and Wi-Fi signal when there is one."""
+    text = f'{vitals.interface}: {format_rate(vitals.net_rate)}'
+    if vitals.wifi_dbm is not None:
+        text += f', signal {vitals.wifi_dbm:.0f} dBm ({WIFI_BAR_WORDS[wifi_bars(vitals.wifi_dbm)]})'
+    return text if vitals.online else f'{text}, but no route to the internet'
 
 
 def describe_pals(vitals, mood):
@@ -1029,7 +1200,11 @@ def build_help(vitals, mood, memories=None, today=None):
     lines = [
         ('Mood', f'{mood}: {explain_mood(vitals, mood)}', 'plain'),
         ('Sky', describe_sky(vitals), 'plain'),
+        ('Network', describe_network(vitals), 'plain'),
     ]
+    if vitals.busiest:
+        name, percent = vitals.busiest
+        lines.append(('Busiest', f'{name}, {percent:.0f}% of one core (of {os.cpu_count()})', 'plain'))
     for i, (text, color) in enumerate(describe_pals(vitals, mood)):
         lines.append(('Pals' if i == 0 else '', text, color))
     lines.append(('Plant', describe_plant(vitals), 'plain'))
@@ -1098,6 +1273,12 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
 
     # The scene only shows when everything else fits too (plus a hop row above the pet and the ground under it)
     show_scene = width >= SCENE_MIN_WIDTH and show_bubble and SKY_HEIGHT + block_height + 2 <= usable
+    # The trend row (sparklines under the status line) comes last: it shows only if it fits with all of that
+    trend = build_trend(vitals, width)
+    if trend and block_height + 1 + (SKY_HEIGHT + 2 if show_scene else 0) <= usable:
+        block_height += 1
+    else:
+        trend = []
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
         sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year,
@@ -1169,6 +1350,10 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         status_row += 1
     add(status_row, (width - 1 - len(status)) // 2, status, 'dim')
     last_row = status_row
+    if trend:
+        last_row += 1
+        for col, text, color in trend:
+            add(last_row, col, text, color)
     if alerts:
         last_row += 1
         add(last_row, (width - 1 - len(alerts)) // 2, alerts, 'alert')
@@ -1179,7 +1364,13 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         if hint:
             add(height - 2, 1, hint, 'dim')
         else:
-            add(height - 2, 0, 'p pet · ? help · q quit', 'dim')
+            hint = 'p pet · ? help · q quit'
+            add(height - 2, 0, hint, 'dim')
+        # The clock sits in the bottom-right corner, when it fits beside the hint
+        clock = format_clock(vitals.now)
+        clock_col = width - 2 - len(clock)
+        if clock_col >= len(hint) + 4:
+            add(height - 2, clock_col, clock, 'dim')
     return cells
 
 
@@ -1224,12 +1415,16 @@ def holiday_sayings(vitals):
 
 
 def pick_saying(mood, vitals, rng=random):
-    """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead."""
+    """Something to say for this mood; calm moods sometimes talk to a pal (or brag about the plant) instead,
+    and a busy pet sometimes says which program is keeping it busy."""
+    if mood == 'busy' and vitals.busiest and rng.random() < BUSY_SAYING_CHANCE:
+        return BUSY_SAYING.format(vitals.busiest[0])
     friend_sayings = ((CLAUDE_SAYINGS if vitals.claude_here else [])
                       + (GUARD_SAYINGS if vitals.adguard_running and vitals.dns_answering is not False else [])
                       + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])
                       + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else [])
-                      + holiday_sayings(vitals))
+                      + holiday_sayings(vitals)
+                      + (WEAK_WIFI_SAYINGS if is_wifi_weak(vitals) else []))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
         return rng.choice(friend_sayings)
     return rng.choice(SAYINGS[mood])
