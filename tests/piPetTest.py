@@ -8,6 +8,7 @@ import io
 import json
 import os
 import random
+import shlex
 import sys
 import tempfile
 import unicodedata
@@ -1298,6 +1299,33 @@ class WaterTest(unittest.TestCase):
             cells = piPet.layout(24, width, 'content', 1, 'hi', make_vitals())
             with self.subTest(width=width):
                 self.assertIn(hint, [text for *_, text, _ in cells])
+
+
+class AutostartTest(unittest.TestCase):
+    def exec_args(self, entry):
+        exec_line = next(line for line in entry.splitlines() if line.startswith('Exec='))[len('Exec='):]
+        return shlex.split(exec_line)  # close enough to the desktop entry rules for these characters
+
+    def test_entry_opens_pi_pet_in_lxterminal(self):
+        entry = piPet.build_autostart_entry('/home/someone/pi-pet/piPet.py', python='/usr/bin/python3')
+        self.assertTrue(entry.startswith('[Desktop Entry]\nType=Application\nName=Pi Pet\n'))
+        self.assertEqual(self.exec_args(entry), ['lxterminal', '--title=Pi Pet', f'--geometry={piPet.AUTOSTART_GEOMETRY}',
+                                                 '--command=/usr/bin/python3 /home/someone/pi-pet/piPet.py'])
+        self.assertIn('Terminal=false', entry)
+
+    def test_awkward_paths_survive_both_kinds_of_quoting(self):
+        path = '/home/some one/my "pets"/piPet.py'
+        entry = piPet.build_autostart_entry(path, python='/usr/bin/python3')
+        command = self.exec_args(entry)[-1][len('--command='):]
+        self.assertEqual(shlex.split(command), ['/usr/bin/python3', path], 'LXTerminal splits it back into the same path')
+
+    def test_autostart_option_prints_the_entry(self):
+        self.assertTrue(piPet.parse_args(['--autostart']).autostart)
+        with mock.patch.object(sys, 'argv', ['piPet.py', '--autostart']), \
+                mock.patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout:
+            piPet.main()
+        self.assertIn(os.path.abspath(piPet.__file__), stdout.getvalue())
+        self.assertTrue(stdout.getvalue().startswith('[Desktop Entry]'))
 
 
 class OnceTest(unittest.TestCase):

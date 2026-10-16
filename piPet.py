@@ -18,6 +18,7 @@ import math
 import os
 import random
 import re
+import shlex
 import shutil
 import sys
 import textwrap
@@ -30,6 +31,9 @@ DEFAULT_INTERFACE = 'wlan0'  # used when there's no default route to follow
 PET_WIDTH = 13
 MIN_WIDTH = 24
 MIN_HEIGHT = 11
+
+# --autostart prints a desktop entry that opens Pi Pet in LXTerminal when the desktop starts
+AUTOSTART_GEOMETRY = '100x30'  # columns x rows: room for the scene, the trend row and five or more pals
 
 # --once prints a snapshot at the terminal's size, capped so a big terminal doesn't get a page of blank rows
 ONCE_MAX_WIDTH = 80
@@ -1729,6 +1733,30 @@ def check_interface(name):
     return name
 
 
+def desktop_entry_quote(arg):
+    """Quote one argument for a desktop entry's Exec line (the freedesktop.org rules)."""
+    if not re.search(r'[\s"`$\\]', arg):
+        return arg
+    return '"' + re.sub(r'(["`$\\])', r'\\\1', arg) + '"'
+
+
+def build_autostart_entry(script_path, python=sys.executable):
+    """A desktop entry (for ~/.config/autostart/) that opens Pi Pet in an LXTerminal window when the desktop
+    starts. LXTerminal splits its --command like a shell would, so the command is shell-quoted first."""
+    command = ' '.join(shlex.quote(part) for part in (python, script_path))
+    exec_line = ' '.join(desktop_entry_quote(arg) for arg in (
+        'lxterminal', '--title=Pi Pet', f'--geometry={AUTOSTART_GEOMETRY}', f'--command={command}'))
+    return '\n'.join([
+        '[Desktop Entry]',
+        'Type=Application',
+        'Name=Pi Pet',
+        "Comment=A little raspberry that reacts to the Pi's real vitals",
+        f'Exec={exec_line}',
+        'Terminal=false',
+        '',
+    ])
+
+
 def parse_args(argv=None):
     """Read the command line. Bad options print a usage message and exit before curses starts."""
     parser = argparse.ArgumentParser(
@@ -1739,6 +1767,10 @@ def parse_args(argv=None):
     parser.add_argument(
         '--iface', type=check_interface, metavar='NAME',
         help='network interface to watch, like wlan0 or eth0 (default: whichever carries internet traffic)',
+    )
+    parser.add_argument(
+        '--autostart', action='store_true',
+        help='print a desktop entry that opens Pi Pet when the desktop starts; save it in ~/.config/autostart/',
     )
     return parser.parse_args(argv)
 
@@ -2025,6 +2057,9 @@ def run_live(screen, forced_mood=None, interface=None):
 
 def main():
     args = parse_args()
+    if args.autostart:
+        print(build_autostart_entry(os.path.abspath(__file__)), end='')
+        return
     if args.once:
         print_once(args.mood, args.iface)
         return

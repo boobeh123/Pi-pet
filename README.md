@@ -56,8 +56,18 @@ python3 piPet.py              # live: p to pet it, w to water the plant, ? for h
 python3 piPet.py --once       # print a snapshot of the whole scene and exit (colored in a terminal; NO_COLOR=1 turns colors off)
 python3 piPet.py --mood hot   # force a mood (see --help for the full list, including happy)
 python3 piPet.py --iface eth0 # watch one network interface (default: whichever carries internet traffic)
+python3 piPet.py --autostart  # print a desktop entry that opens Pi Pet when the desktop starts
 python3 piPet.py --help       # list the options
 ```
+
+**Start it with the desktop:** `--autostart` prints a desktop entry that opens Pi Pet in a 100×30 LXTerminal window at login, using this copy's full path. It only prints; to use it, save it where the desktop looks:
+
+```bash
+mkdir -p ~/.config/autostart
+python3 piPet.py --autostart > ~/.config/autostart/piPet.desktop
+```
+
+Delete that file to stop it. (On Raspberry Pi OS with labwc, `lxsession-xdg-autostart` runs everything in `~/.config/autostart` at login.)
 
 In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). After a hot spell (the CPU at 70 °C or more), once it cools back down, a red-yellow-blue rainbow appears for 10 minutes on the side of the sky opposite the sun, behind any passing clouds. In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky, and the pet says "make a wish!" A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
 
@@ -127,7 +137,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-246 standard-library tests, no sensors needed. They check:
+249 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -168,6 +178,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the network speed: no spike at startup, counter resets or a missing interface read as 0, and switching networks starts a fresh measurement
 - finding the interface that carries internet traffic, and reading its byte counts
 - the command-line options, and the status line when a sensor is missing
+- `--autostart`: the entry opening Pi Pet in LXTerminal, a path with a space and quotes surviving both kinds of quoting, and the option printing the entry
 
 ## Where the data comes from
 
