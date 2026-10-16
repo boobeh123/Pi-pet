@@ -82,6 +82,8 @@ Once it flowers, the pet sometimes brags about it.
 
 When Claude arrives the pet says "oh hi Claude!". While pals are around, its calm moods (content, busy, surfing) sometimes chat with them. Urgent moods stick to their own news.
 
+A clock sits in the bottom-right corner of the live view, like `Thu Oct 15  8:42 PM`, when there's room beside the key hint.
+
 In a smaller terminal window it drops the scene first, then the speech bubble, and keeps the pet and a shorter status line. Below 24×11 it asks for a bigger window.
 
 Want to see it get busy for real? In another terminal, `yes > /dev/null` keeps one CPU core at 100% (Ctrl+C to stop); run it two or three times to push the load past 2.
@@ -104,7 +106,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-181 standard-library tests, no sensors needed. They check:
+184 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -128,6 +130,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
+- the clock: its format (midnight, noon, single-digit hours), its corner, and leaving it out where there's no room or in a snapshot
 - watering: `w` pours for 3 seconds and counts once per watering, the can's spout over the middle of every plant stage with drops falling between, no can without a plant or room, and the key hint in three widths
 - holidays: every date range, the new art being one column wide, the party, Santa and pumpkin hats (and the leaf on other days), the birthday age line, the jack-o'-lantern on the grass past the plant (and its flicker), bats only on Halloween nights, the Christmas lights covering the grass exactly once and chasing colors, fireworks (how often, rocket-bang-sparks, inside the sky, night only), Pi Day clouds, holiday lines only in calm moods, and the help page's "Today" line; the scene and sky sweeps include every holiday
 - `--once`: the snapshot shows the whole scene, trims blank space, leaves out the key hint, and only uses colors when printing to a terminal

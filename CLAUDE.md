@@ -47,6 +47,7 @@ The data flows one way: **sensors → `Vitals` → `mood()` → `layout()` → c
     - Pals and the plant stand on the pet's lowest row (`feet_row`), just above the ground.
     - Nothing goes in the bubble's rows. That was a real bug once.
   - **The bounce** (busy/happy) arrives from `build_pet` as a leading `''` line. `layout()` strips it and moves the pet instead: up into the hop row when the ground is shown, down into the blank row otherwise. That way the bubble never moves.
+  - The live view's bottom bar (`show_hint`) has the key hint on the left and the clock (`format_clock(vitals.now)`) on the right when it fits.
   - Nothing is drawn on the bottom row or in the last column. curses raises an error when writing the bottom-right corner.
 - **`LiveState`** owns the live view's timing rules (`FPS` = 4 ticks/s), apart from curses so `LiveStateTest` can drive them with a fake clock (`now`) and scripted readings:
   - `press(key, now)` handles keys (p pets, w waters for `WATER_SECONDS`, ? or h toggles `show_help`) and returns False to quit;

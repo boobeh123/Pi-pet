@@ -26,7 +26,8 @@ TICKS = range(24)  # long enough to cover every animation cycle (blink is every 
 def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltage=False,
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
-                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026):
+                moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
+                now=datetime.datetime(2026, 10, 15, 20, 42)):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -50,6 +51,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.dns_answering = dns_answering
     vitals.holiday = holiday
     vitals.year = year
+    vitals.now = now
     return vitals
 
 
@@ -845,6 +847,28 @@ class HolidayTest(unittest.TestCase):
         holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
         self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
         self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
+
+
+class ClockTest(unittest.TestCase):
+    def test_format_clock(self):
+        cases = [((2026, 10, 15, 0, 5), 'Thu Oct 15  12:05 AM'), ((2026, 10, 15, 9, 7), 'Thu Oct 15  9:07 AM'),
+                 ((2026, 10, 15, 12, 0), 'Thu Oct 15  12:00 PM'), ((2026, 12, 31, 23, 59), 'Thu Dec 31  11:59 PM')]
+        for parts, text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(piPet.format_clock(datetime.datetime(*parts)), text)
+
+    def clock_cells(self, width, show_hint=True):
+        cells = piPet.layout(24, width, 'content', 1, 'hi', make_vitals(), show_hint=show_hint)
+        return [(row, col, text) for row, col, text, _ in cells if text == 'Thu Oct 15  8:42 PM']
+
+    def test_clock_in_the_bottom_right_corner(self):
+        [(row, col, text)] = self.clock_cells(80)
+        self.assertEqual(row, 24 - 2)
+        self.assertEqual(col + len(text), 80 - 2)
+
+    def test_no_clock_without_room_or_in_a_snapshot(self):
+        self.assertEqual(self.clock_cells(40), [], 'no room beside the key hint')
+        self.assertEqual(self.clock_cells(80, show_hint=False), [], '--once has no bottom bar')
 
 
 class WaterTest(unittest.TestCase):

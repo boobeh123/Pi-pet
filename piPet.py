@@ -427,12 +427,13 @@ class Vitals:
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
         # Only asked while AdGuard runs: is it actually serving DNS? None means "not asked"
         self.dns_answering = is_udp_port_bound(DNS_PORT) if self.adguard_running else None
-        now = time.localtime()
-        self.hour = now.tm_hour + now.tm_min / 60  # local time, for the sun and moon
+        now = datetime.datetime.now()  # local time, for the clock, the sun and moon, and holidays
+        self.now = now
+        self.hour = now.hour + now.minute / 60
         self.moon_age = moon_age_days(time.time())
-        self.day_of_year = now.tm_yday  # moves the planet a little each night
-        self.year = now.tm_year
-        self.holiday = holiday_on(now.tm_mon, now.tm_mday)
+        self.day_of_year = now.timetuple().tm_yday  # moves the planet a little each night
+        self.year = now.year
+        self.holiday = holiday_on(now.month, now.day)
         self.update_net_rate()
 
     def update_net_rate(self):
@@ -497,6 +498,11 @@ def format_duration(seconds):
         return f'{seconds // 3600} h {seconds % 3600 // 60} min'
     days = seconds // 86400
     return f'{days} day{"s" if days != 1 else ""} {seconds % 86400 // 3600} h'
+
+
+def format_clock(now):
+    """The live view's clock: 'Wed Oct 15  3:32 PM'."""
+    return f'{now:%a %b} {now.day}  {now.hour % 12 or 12}:{now:%M} {"AM" if now.hour < 12 else "PM"}'
 
 
 def format_rate(bytes_per_sec):
@@ -1179,7 +1185,13 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
         if hint:
             add(height - 2, 1, hint, 'dim')
         else:
-            add(height - 2, 0, 'p pet · ? help · q quit', 'dim')
+            hint = 'p pet · ? help · q quit'
+            add(height - 2, 0, hint, 'dim')
+        # The clock sits in the bottom-right corner, when it fits beside the hint
+        clock = format_clock(vitals.now)
+        clock_col = width - 2 - len(clock)
+        if clock_col >= len(hint) + 4:
+            add(height - 2, clock_col, clock, 'dim')
     return cells
 
 
