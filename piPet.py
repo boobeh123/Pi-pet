@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import sys
 import textwrap
@@ -262,6 +263,14 @@ FOX_PAL = [['/\\ /\\', '(o o)', ' \\v/ '], ['/\\ /\\', '(- -)', ' \\v/ ']]  # Fi
 FOX_CHEERING = ['/\\ /\\', '(^ ^)', ' \\v/ ']
 VS_CODE_PAL = [['.---.', '|</>|', "'---'"], ['.---.', '|</_|', "'---'"]]  # VS Code; the > blinks like a cursor
 VS_CODE_CHEERING = ['.---.', '|^_^|', "'---'"]
+# Pals for what's happening: music while sound plays, a USB stick while one is plugged in, an owl late at night
+MUSIC_PAL = [[' d   ', '(^o^)', ' / > '], ['   d ', '(^o^)', ' < \\ ']]  # dancing, the note hopping side to side
+MUSIC_CHEERING = [' d d ', '(^o^)', ' / \\ ']
+USB_PAL = [[' [=] ', '|o_o|', "'---'"], [' [*] ', '|o_o|', "'---'"]]  # its activity light blinks
+USB_CHEERING = [' [*] ', '|^_^|', "'---'"]
+OWL_PAL = [['{o,o}', '/)_) ', ' " " '], ['{-,o}', '/)_) ', ' " " ']]  # the second frame is a wink
+OWL_CHEERING = ['{^,^}', '/)_) ', ' " " ']
+OWL_HOURS = (22, 4)  # the owl visits from 10 PM until 4 AM
 
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
@@ -540,6 +549,39 @@ def is_udp_port_bound(port):
     return False
 
 
+def is_sound_playing():
+    """True if any sound card is playing right now: one of its playback streams in /proc/asound is RUNNING."""
+    for status_path in glob.glob('/proc/asound/card*/pcm*p/sub*/status'):
+        try:
+            with open(status_path) as f:
+                if 'RUNNING' in f.readline():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def read_usb_drives():
+    """The names of drives mounted under /media/ (where the desktop puts USB sticks), from /proc/mounts."""
+    drives = []
+    try:
+        with open('/proc/mounts') as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) > 1 and fields[1].startswith('/media/'):
+                    # /proc/mounts writes a space in a name as \040 (octal escapes)
+                    mount_point = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), fields[1])
+                    drives.append(os.path.basename(mount_point))
+    except OSError:
+        pass
+    return drives
+
+
+def is_owl_time(hour):
+    start, end = OWL_HOURS
+    return hour >= start or hour < end
+
+
 def is_adguard_installed():
     return any(os.path.exists(path) for path in ADGUARD_INSTALL_PATHS)
 
@@ -579,6 +621,8 @@ class Vitals:
         self.claude_here = 'claude' in names  # a Claude Code session, in VS Code or the terminal
         self.vscode_open = 'code' in names
         self.firefox_open = any(name in names for name in FIREFOX_PROCESS_NAMES)
+        self.sound_playing = is_sound_playing()
+        self.usb_drives = read_usb_drives()
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
         self.adguard_running = 'AdGuardHome' in names if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
@@ -1146,9 +1190,10 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
 def build_pals(vitals, tick, mood):
     """The pals visiting right now, nearest the pet first, as (name, lines, color) for this frame.
 
-    They line up by how permanent they are (guard, doctor, VS Code, Firefox, then Claude), so the ones
-    that come and go don't make the others move, and a narrow window drops the most fleeting first. While the pet is
-    happy (being petted) they cheer, unless the guard is busy with a DNS problem or asleep.
+    They line up by how permanent they are (guard, doctor, VS Code, Firefox, Claude, then the night owl,
+    a USB stick and the music pal), so the ones that come and go don't make the others move, and a
+    narrow window drops the most fleeting first. While the pet is happy (being petted) they cheer,
+    unless the guard is busy with a DNS problem or asleep.
     """
     cheering = mood == 'happy'
     pals = []
@@ -1175,6 +1220,15 @@ def build_pals(vitals, tick, mood):
     if vitals.claude_here:
         twinkle_ticks = 2 if cheering else 4  # twinkles about once a second, twice as fast when cheering
         pals.append(('claude', CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
+    if is_owl_time(vitals.hour):
+        frame = OWL_CHEERING if cheering else OWL_PAL[1 if tick % 32 < 2 else 0]  # a wink every 8 seconds
+        pals.append(('owl', frame, 'pot'))
+    if vitals.usb_drives:
+        frame = USB_CHEERING if cheering else USB_PAL[tick // 3 % len(USB_PAL)]  # the light blinks
+        pals.append(('usb', frame, 'plain'))
+    if vitals.sound_playing:
+        frame = MUSIC_CHEERING if cheering else MUSIC_PAL[tick // 2 % len(MUSIC_PAL)]  # dancing to the beat
+        pals.append(('music', frame, 'planet'))
     return pals
 
 
@@ -1316,6 +1370,12 @@ def describe_pals(vitals, mood):
         lines.append(('fox     Firefox is open', 'plain'))
     if vitals.claude_here:
         lines.append(('Claude  a Claude Code session is open', 'plain'))
+    if is_owl_time(vitals.hour):
+        lines.append(("owl     it's late at night (10 PM to 4 AM)", 'plain'))
+    if vitals.usb_drives:
+        lines.append((f'USB     a drive is plugged in: {", ".join(vitals.usb_drives)}', 'plain'))
+    if vitals.sound_playing:
+        lines.append(('music   sound is playing', 'plain'))
     return lines or [('nobody is visiting right now', 'plain')]
 
 

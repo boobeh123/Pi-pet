@@ -29,7 +29,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
                 now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
-                load_history=(), rainbow=False, vscode_open=False, firefox_open=False):
+                load_history=(), rainbow=False, vscode_open=False, firefox_open=False, sound_playing=False,
+                usb_drives=()):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -59,6 +60,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.rainbow = rainbow
     vitals.vscode_open = vscode_open
     vitals.firefox_open = firefox_open
+    vitals.sound_playing = sound_playing
+    vitals.usb_drives = list(usb_drives)
     vitals.temp_history = list(temp_history)
     vitals.load_history = list(load_history)
     return vitals
@@ -298,7 +301,9 @@ class SceneTest(unittest.TestCase):
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
                                                          holiday=HOLIDAYS[tick % len(HOLIDAYS)],
                                                          load_history=[1.0] * (300 if tick % 2 else 0),
-                                                         rainbow=tick % 5 == 0),
+                                                         rainbow=tick % 5 == 0, vscode_open=True,
+                                                         firefox_open=tick % 2 == 1, sound_playing=tick % 3 == 2,
+                                                         usb_drives=['STICK'] if tick % 4 == 3 else []),
                                              watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -1826,6 +1831,67 @@ class ProgramPalTest(unittest.TestCase):
     def test_help_says_why_they_are_here(self):
         lines = [text for text, _ in piPet.describe_pals(make_vitals(vscode_open=True, firefox_open=True), 'content')]
         self.assertEqual(lines, ['code    VS Code is open', 'fox     Firefox is open'])
+
+
+SAMPLE_MOUNTS = """\
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+/dev/mmcblk0p2 / ext4 rw,noatime 0 0
+/dev/sda1 /media/rpingu/MY\\040STICK vfat rw,nosuid,nodev,relatime 0 0
+"""
+
+
+class MorePalsTest(unittest.TestCase):
+    def test_sound_playing(self):
+        def playing(first_lines):
+            paths = [f'/proc/asound/card{i}/pcm0p/sub0/status' for i in range(len(first_lines))]
+            files = dict(zip(paths, first_lines))
+            with mock.patch.object(piPet.glob, 'glob', return_value=paths), \
+                    mock.patch('builtins.open', side_effect=lambda path, *a, **k: io.StringIO(files[path] + '\n')):
+                return piPet.is_sound_playing()
+        self.assertFalse(playing(['closed', 'closed']))
+        self.assertTrue(playing(['closed', 'state: RUNNING']))
+        self.assertFalse(playing([]), 'no sound cards')
+
+    def test_usb_drives(self):
+        with fake_file(SAMPLE_MOUNTS):
+            self.assertEqual(piPet.read_usb_drives(), ['MY STICK'], 'only /media/, with \\040 turned back into a space')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertEqual(piPet.read_usb_drives(), [])
+
+    def test_owl_hours(self):
+        for hour, visiting in ((21.99, False), (22.0, True), (0.0, True), (3.99, True), (4.0, False), (12.0, False)):
+            with self.subTest(hour=hour):
+                self.assertEqual(piPet.is_owl_time(hour), visiting)
+
+    def test_art_lines_up_and_is_one_column(self):
+        frames = piPet.MUSIC_PAL + piPet.USB_PAL + piPet.OWL_PAL + [piPet.MUSIC_CHEERING, piPet.USB_CHEERING, piPet.OWL_CHEERING]
+        for frame in frames:
+            self.assertEqual({len(line) for line in frame}, {5})
+            self.assertTrue(all(is_one_column(char) for char in ''.join(frame)))
+
+    def test_who_visits_when(self):
+        def names(**readings):
+            return [name for name, _, _ in piPet.build_pals(make_vitals(**readings), 1, 'content')]
+        self.assertEqual(names(), [])
+        self.assertEqual(names(hour=23.0), ['owl'])
+        self.assertEqual(names(usb_drives=['MY STICK']), ['usb'])
+        self.assertEqual(names(sound_playing=True), ['music'])
+        self.assertEqual(names(claude_here=True, hour=23.0, usb_drives=['X'], sound_playing=True, vscode_open=True),
+                         ['vscode', 'claude', 'owl', 'usb', 'music'], 'the most fleeting stand farthest out')
+
+    def test_they_move(self):
+        def frames(name, **readings):
+            return {tuple(lines) for tick in range(32)
+                    for pal, lines, _ in piPet.build_pals(make_vitals(**readings), tick, 'content') if pal == name}
+        self.assertEqual(len(frames('music', sound_playing=True)), 2, 'dancing')
+        self.assertEqual(len(frames('usb', usb_drives=['X'])), 2, 'a blinking light')
+        self.assertEqual(len(frames('owl', hour=23.0)), 2, 'a wink')
+
+    def test_help_says_why_they_are_here(self):
+        lines = [text for text, _ in piPet.describe_pals(make_vitals(hour=23.0, usb_drives=['MY STICK'], sound_playing=True),
+                                                         'content')]
+        self.assertEqual(lines, ["owl     it's late at night (10 PM to 4 AM)", 'USB     a drive is plugged in: MY STICK',
+                                 'music   sound is playing'])
 
 
 class CheerTest(unittest.TestCase):
