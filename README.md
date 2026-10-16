@@ -69,11 +69,18 @@ Pals visit and stand on the grass to the pet's left, when the window has room fo
 |---|---|---|
 | Guard | AdGuard Home is installed: on watch while it runs and serves DNS, alarmed if it runs but nothing is bound to port 53, asleep if it stops | A blue `(o_o)` with a helmet and a `[+]` shield, glancing left and right; a red `(O_O)` with a flashing `!` when alarmed; `(-_-)` with a `z` when asleep |
 | Doctor | The [Pi Vitals](https://github.com/boobeh123/Pi-vitals) dashboard is listening on port 3141 | A `(o-o)` in a cross cap and lab coat with a clipboard, checking on the pet and taking notes; `(O-O)` worried when the pet is dizzy, hot, stuffed or hungry |
+| VS Code | VS Code is open | A cyan monitor `\|</>\|` whose `>` blinks like a cursor |
+| Fox | Firefox is open (any of its processes) | An orange fox `(o o)` with pointy ears that blinks now and then |
 | Claude | A Claude Code session is open on the Pi (VS Code or terminal) | A gold sparkle `-^‿^-` that twinkles |
+| Owl | It's late at night (10 PM to 4 AM) | A `{o,o}` owl that winks now and then |
+| USB | A USB drive is plugged in (mounted under `/media/`) | A `\|o_o\|` stick whose activity light blinks; the `?` page names the drive |
+| Music | Sound is playing | A magenta dancer `(^o^)` with a note hopping side to side |
 
-When you pet the pet, the guard and the doctor cheer with their arms up, `(^_^)` and `(^-^)`, and Claude's sparkle twinkles twice as fast. An alarmed or sleeping guard stays that way: a DNS problem doesn't stop for a celebration.
+**Pals socialize.** Every 20 to 40 seconds one of them says something in a little bubble over its head ("so many tabs!", "night owl club"), and about half the time two visiting pals have a quick word instead: the fox says "so many tabs!" and VS Code answers "same, honestly". Their lines fit the moment: the guard only says "all quiet on port 53" while DNS really is being served, and the doctor only says "vitals look good" when nothing's wrong.
 
-Pals line up by how permanent they are: the guard nearest the pet, then the doctor, then Claude, so the ones that come and go don't make the others move. A narrow window drops the farthest first. If AdGuard Home stops, the alert line says `AdGuard stopped`; if it keeps running but stops serving DNS (nothing bound to UDP port 53), it says `DNS port 53 closed`. On a Pi without AdGuard Home there's no guard.
+When you pet the pet, the guard, the doctor, VS Code and the fox cheer, `(^_^)` `(^-^)` `|^_^|` `(^ ^)`, and Claude's sparkle twinkles twice as fast. An alarmed or sleeping guard stays that way: a DNS problem doesn't stop for a celebration.
+
+Pals line up by how permanent they are: the guard nearest the pet, then the doctor, VS Code, the fox, Claude, the owl, a USB stick and the music pal, so the ones that come and go don't make the others move. They stand a column apart, so five fit beside the pet at 80 columns; when more are visiting than fit, the farthest spot takes turns, changing every 10 seconds. If AdGuard Home stops, the alert line says `AdGuard stopped`; if it keeps running but stops serving DNS (nothing bound to UDP port 53), it says `DNS port 53 closed`. On a Pi without AdGuard Home there's no guard.
 
 ## The plant
 
@@ -120,7 +127,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-223 standard-library tests, no sensors needed. They check:
+246 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -132,6 +139,10 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - the Claude pal: finding a `claude` process, visiting only while Claude is here and there's room, standing on the grass left of the pet, twinkling, and when the pet chats with it
 - the AdGuard guard: no guard without AdGuard Home, glancing around on watch, dozing and an alert when it stops, standing nearest the pet, and getting the only spot in a narrow window
 - the DNS check: finding a bound port-53 socket (and not mistaking an outgoing query for a server), the alarmed guard and its alert, and no alarm unless AdGuard runs with the port closed
+- pals socializing: their lines fitting the situation, conversations needing both pals (and all being well for the guard and doctor), a conversation's timing, a single line, nobody to chat with, and the bubble floating over its pal in its color without reaching the pet
+- the owl, USB and music pals: reading the sound cards and the mounts (a space in a drive name included), the owl's hours, their art, who visits when and where they stand, their animations, and the `?` page
+- the VS Code pal and the fox: their art, visiting only while their program is open, blinking and cheering, the lineup order, Firefox's many process names, and the `?` page
+- pals taking turns: everyone fitting, the last spot cycling through the pals that don't fit, a lone spot shared, and no room at all
 - the doctor: finding a listening port, visiting only while Pi Vitals runs, checking and taking notes, worrying about urgent moods, and the pals' lineup order
 - the plant: its four stages by uptime, standing on the grass right of the pet for every mood and frame, hidden when there's no room or no uptime reading, and bragging only once it flowers
 - the moon: the formula against the 2024-04-08 eclipse (new moon) and the 2024-04-23 full moon, its shape through the month, and new moon nights having no moon and more stars
@@ -178,6 +189,8 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Moon phase | days since a known new moon (2000-01-06 18:14 UTC) modulo the 29.53-day lunar month; good to about a day |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |
 | Pi Vitals doctor | a socket listening on port 3141 in `/proc/net/tcp` or `tcp6` (read only, never connects) |
+| Music pal | a playback stream `RUNNING` in `/proc/asound/card*/pcm*p/sub*/status` |
+| USB pal | drives mounted under `/media/` in `/proc/mounts` |
 | AdGuard guard | installed if `/opt/AdGuardHome/AdGuardHome` or its systemd unit exists; on watch while a process named `AdGuardHome` runs and a UDP socket is bound to port 53 in `/proc/net/udp` or `udp6` (read only, never sends a query) |
 | Online | a default route in `/proc/net/route` |
 | Trends | the last 300 temperature and load readings (10 minutes at one every 2 seconds) |

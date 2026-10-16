@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import sys
 import textwrap
@@ -242,6 +243,8 @@ PLANT_STAGES = [
     (3, [('  v  ', 'leaf'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # leafy
     (7, [(' (@) ', 'berry'), (' \\|/ ', 'leaf'), ('  |  ', 'leaf'), POT]),  # in flower
 ]
+PAL_GAP = 1  # columns between pals
+PAL_TURN_TICKS = FPS * 10  # when more pals visit than fit, the farthest spot changes hands this often
 PLANT_STAGE_NAMES = ['sprout', 'seedling', 'leafy', 'in flower']
 PLANT_OFFSET = 24  # columns from the pet's left edge, past the Zs, cloud and hearts
 
@@ -254,6 +257,34 @@ DOCTOR_CHECKING = [
 DOCTOR_WORRIED = [' _+_ ', '(O-O)', '/|=|\\']
 DOCTOR_CHEERING = [' _+_ ', '(^-^)', '\\|=|/']  # arms up, while the pet is being petted
 URGENT_MOODS = ('dizzy', 'hot', 'stuffed', 'hungry')
+
+# Program pals: they visit while their program is open
+FOX_PAL = [['/\\ /\\', '(o o)', ' \\v/ '], ['/\\ /\\', '(- -)', ' \\v/ ']]  # Firefox; the second frame is a blink
+FOX_CHEERING = ['/\\ /\\', '(^ ^)', ' \\v/ ']
+VS_CODE_PAL = [['.---.', '|</>|', "'---'"], ['.---.', '|</_|', "'---'"]]  # VS Code; the > blinks like a cursor
+VS_CODE_CHEERING = ['.---.', '|^_^|', "'---'"]
+# Pals for what's happening: music while sound plays, a USB stick while one is plugged in, an owl late at night
+MUSIC_PAL = [[' d   ', '(^o^)', ' / > '], ['   d ', '(^o^)', ' < \\ ']]  # dancing, the note hopping side to side
+MUSIC_CHEERING = [' d d ', '(^o^)', ' / \\ ']
+USB_PAL = [[' [=] ', '|o_o|', "'---'"], [' [*] ', '|o_o|', "'---'"]]  # its activity light blinks
+USB_CHEERING = [' [*] ', '|^_^|', "'---'"]
+OWL_PAL = [['{o,o}', '/)_) ', ' " " '], ['{-,o}', '/)_) ', ' " " ']]  # the second frame is a wink
+OWL_CHEERING = ['{^,^}', '/)_) ', ' " " ']
+OWL_HOURS = (22, 4)  # the owl visits from 10 PM until 4 AM
+# Pals socialize: every so often one says something in a little bubble, or two of them have a word
+PAL_CHAT_SECONDS = (20, 40)  # the gap between chats, picked at random in this range
+PAL_SAY_SECONDS = 4  # how long each pal's line stays up
+CONVERSATION_CHANCE = 1 / 2  # when a pair that can talk is visiting, how often a chat is a conversation
+# (first pal, its line, second pal, its reply); 'guard' and 'doctor' only join while all's well (see pal_lines)
+CONVERSATIONS = [
+    ('fox', 'so many tabs!', 'vscode', 'same, honestly'),
+    ('vscode', 'it compiles!', 'claude', 'ship it!'),
+    ('guard', 'all quiet on port 53', 'doctor', 'vitals look good too'),
+    ('owl', 'up late?', 'claude', 'always'),
+    ('music', 'great song!', 'fox', 'turn it up!'),
+    ('usb', 'I brought files!', 'vscode', 'ooh, what kind?'),
+    ('claude', 'hi everyone!', 'guard', 'hello!'),
+]
 
 ADGUARD_INSTALL_PATHS = ('/opt/AdGuardHome/AdGuardHome', '/etc/systemd/system/AdGuardHome.service')
 
@@ -532,6 +563,39 @@ def is_udp_port_bound(port):
     return False
 
 
+def is_sound_playing():
+    """True if any sound card is playing right now: one of its playback streams in /proc/asound is RUNNING."""
+    for status_path in glob.glob('/proc/asound/card*/pcm*p/sub*/status'):
+        try:
+            with open(status_path) as f:
+                if 'RUNNING' in f.readline():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def read_usb_drives():
+    """The names of drives mounted under /media/ (where the desktop puts USB sticks), from /proc/mounts."""
+    drives = []
+    try:
+        with open('/proc/mounts') as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) > 1 and fields[1].startswith('/media/'):
+                    # /proc/mounts writes a space in a name as \040 (octal escapes)
+                    mount_point = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), fields[1])
+                    drives.append(os.path.basename(mount_point))
+    except OSError:
+        pass
+    return drives
+
+
+def is_owl_time(hour):
+    start, end = OWL_HOURS
+    return hour >= start or hour < end
+
+
 def is_adguard_installed():
     return any(os.path.exists(path) for path in ADGUARD_INSTALL_PATHS)
 
@@ -569,6 +633,10 @@ class Vitals:
         processes = self.update_busiest()
         names = {name for name, _, _ in processes.values()}
         self.claude_here = 'claude' in names  # a Claude Code session, in VS Code or the terminal
+        self.vscode_open = 'code' in names
+        self.firefox_open = any(name in names for name in FIREFOX_PROCESS_NAMES)
+        self.sound_playing = is_sound_playing()
+        self.usb_drives = read_usb_drives()
         # None when AdGuard Home isn't installed, so other Pis get no guard at all
         self.adguard_running = 'AdGuardHome' in names if is_adguard_installed() else None
         self.pi_vitals_running = is_port_listening(PI_VITALS_PORT)
@@ -1134,32 +1202,102 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
 
 
 def build_pals(vitals, tick, mood):
-    """The pals visiting right now, nearest the pet first, as (lines, color) for this frame.
+    """The pals visiting right now, nearest the pet first, as (name, lines, color) for this frame.
 
-    They line up by how permanent they are (guard, doctor, then Claude), so the ones that come and go
-    don't make the others move, and a narrow window drops the most fleeting first. While the pet is
-    happy (being petted) they cheer, unless the guard is busy with a DNS problem or asleep.
+    They line up by how permanent they are (guard, doctor, VS Code, Firefox, Claude, then the night owl,
+    a USB stick and the music pal), so the ones that come and go don't make the others move, and a
+    narrow window drops the most fleeting first. While the pet is happy (being petted) they cheer,
+    unless the guard is busy with a DNS problem or asleep.
     """
     cheering = mood == 'happy'
     pals = []
     if vitals.adguard_running and vitals.dns_answering is False:
-        pals.append((GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
+        pals.append(('guard', GUARD_ALARMED[tick // 2 % len(GUARD_ALARMED)], 'alert'))  # the ! flashes twice a second
     elif vitals.adguard_running:
         frame = GUARD_CHEERING if cheering else GUARD_ON_WATCH[tick // 4 % len(GUARD_ON_WATCH)]  # a glance every second
-        pals.append((frame, 'guard'))
+        pals.append(('guard', frame, 'guard'))
     elif vitals.adguard_running is False:
-        pals.append((GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
+        pals.append(('guard', GUARD_ASLEEP[tick // 4 % len(GUARD_ASLEEP)], 'dim'))
     if vitals.pi_vitals_running:
         if cheering:
-            pals.append((DOCTOR_CHEERING, 'doctor'))
+            pals.append(('doctor', DOCTOR_CHEERING, 'doctor'))
         elif mood in URGENT_MOODS:
-            pals.append((DOCTOR_WORRIED, 'doctor'))
+            pals.append(('doctor', DOCTOR_WORRIED, 'doctor'))
         else:
-            pals.append((DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
+            pals.append(('doctor', DOCTOR_CHECKING[tick // 8 % len(DOCTOR_CHECKING)], 'doctor'))  # looks up or down every 2 s
+    if vitals.vscode_open:
+        frame = VS_CODE_CHEERING if cheering else VS_CODE_PAL[tick // 2 % len(VS_CODE_PAL)]  # the cursor blinks
+        pals.append(('vscode', frame, 'extra'))
+    if vitals.firefox_open:
+        frame = FOX_CHEERING if cheering else FOX_PAL[1 if tick % 24 < 2 else 0]  # a blink every 6 seconds
+        pals.append(('fox', frame, 'pumpkin'))
     if vitals.claude_here:
         twinkle_ticks = 2 if cheering else 4  # twinkles about once a second, twice as fast when cheering
-        pals.append((CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
+        pals.append(('claude', CLAUDE_PAL[tick // twinkle_ticks % 2], 'claude'))
+    if is_owl_time(vitals.hour):
+        frame = OWL_CHEERING if cheering else OWL_PAL[1 if tick % 32 < 2 else 0]  # a wink every 8 seconds
+        pals.append(('owl', frame, 'pot'))
+    if vitals.usb_drives:
+        frame = USB_CHEERING if cheering else USB_PAL[tick // 3 % len(USB_PAL)]  # the light blinks
+        pals.append(('usb', frame, 'plain'))
+    if vitals.sound_playing:
+        frame = MUSIC_CHEERING if cheering else MUSIC_PAL[tick // 2 % len(MUSIC_PAL)]  # dancing to the beat
+        pals.append(('music', frame, 'planet'))
     return pals
+
+
+def pal_lines(name, vitals, mood):
+    """What a pal might say right now. The guard and doctor only say all's well when it is."""
+    if name == 'guard':
+        if vitals.adguard_running is False:
+            return ['zzz']
+        if vitals.dns_answering is False:
+            return ['port 53 is closed!', 'DNS, where are you?']
+        return ['on duty', 'all quiet on port 53', 'DNS is flowing']
+    if name == 'doctor':
+        if mood in URGENT_MOODS:
+            return ['hmm, let me look', 'take it easy']
+        return ['vitals look good', 'say ahh', 'healthy as can be']
+    if name == 'claude':
+        sky = 'nice sky today' if 6 <= vitals.hour < 18 else 'pretty night sky'
+        return ['hi friend!', sky, 'happy to be here']
+    if name == 'usb':
+        drive = vitals.usb_drives[0] if vitals.usb_drives else 'files'
+        return [f'I brought {drive}!', 'safely remove me!', 'beep boop']
+    return {
+        'vscode': ['saved!', 'it compiles!', 'semicolons...', 'one more feature?'],
+        'fox': ['so many tabs!', "what're we reading?", 'browsing...'],
+        'owl': ['hoo hoo', 'up late?', 'night owl club'],
+        'music': ['la la la', 'great song!', 'turn it up!'],
+    }.get(name, [])
+
+
+def conversations_now(names, vitals, mood):
+    """The CONVERSATIONS both of whose pals are visiting (and, for the guard and doctor, all is well)."""
+    def can_talk(name):
+        if name not in names:
+            return False
+        if name == 'guard':
+            return bool(vitals.adguard_running) and vitals.dns_answering is not False
+        return name != 'doctor' or mood not in URGENT_MOODS
+    return [chat for chat in CONVERSATIONS if can_talk(chat[0]) and can_talk(chat[2])]
+
+
+def pals_that_fit(pals, room, tick):
+    """The pals that fit in `room` columns, nearest first. When more visit than fit, the farthest spot
+    takes turns among the rest, changing every PAL_TURN_TICKS, so everyone gets some time on screen."""
+    fit = 0
+    used = 0
+    for _, lines, _ in pals:
+        width = len(lines[0]) + (PAL_GAP if fit else 0)
+        if used + width > room:
+            break
+        used += width
+        fit += 1
+    if fit == 0 or fit >= len(pals):
+        return pals[:fit]
+    waiting = pals[fit - 1:]  # the pal in the last spot and everyone who didn't fit share that spot
+    return pals[:fit - 1] + [waiting[tick // PAL_TURN_TICKS % len(waiting)]]
 
 
 def plant_stage(uptime_sec):
@@ -1277,8 +1415,18 @@ def describe_pals(vitals, mood):
     if vitals.pi_vitals_running:
         worried = ', and worried about me' if mood in URGENT_MOODS else ''
         lines.append((f'doctor  Pi Vitals is listening on port {PI_VITALS_PORT}{worried}', 'plain'))
+    if vitals.vscode_open:
+        lines.append(('code    VS Code is open', 'plain'))
+    if vitals.firefox_open:
+        lines.append(('fox     Firefox is open', 'plain'))
     if vitals.claude_here:
         lines.append(('Claude  a Claude Code session is open', 'plain'))
+    if is_owl_time(vitals.hour):
+        lines.append(("owl     it's late at night (10 PM to 4 AM)", 'plain'))
+    if vitals.usb_drives:
+        lines.append((f'USB     a drive is plugged in: {", ".join(vitals.usb_drives)}', 'plain'))
+    if vitals.sound_playing:
+        lines.append(('music   sound is playing', 'plain'))
     return lines or [('nobody is visiting right now', 'plain')]
 
 
@@ -1350,7 +1498,7 @@ def build_help(vitals, mood, memories=None, today=None):
 
 
 def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=False, memories=None,
-           watering=False):
+           watering=False, pal_saying=None):
     """Work out everything on screen as (row, col, text, color) cells, clipped to the window.
 
     Colors: leaf, berry, extra, plain, dim, alert, sun, sunset, moon, planet, shooting_star, grass,
@@ -1437,16 +1585,20 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     drawn_top = pet_top + (0 if not bounced else -1 if show_scene else 1)
     for i, (text, color) in enumerate(pet):
         add(drawn_top + i, left, text, color)
-    # Pals stand to the pet's left with their feet level with its feet, as many as fit
+    # Pals stand to the pet's left with their feet level with its feet, as many as fit (taking turns if not)
     feet_row = pet_top + pet_height - 1
     pal_right = left - 2
-    for lines, color in build_pals(vitals, tick, mood):
+    for name, lines, color in pals_that_fit(build_pals(vitals, tick, mood), pal_right, tick):
         pal_left = pal_right - len(lines[0])
-        if pal_left < 0:
-            break
         for i, line in enumerate(lines):
             add(feet_row - len(lines) + 1 + i, pal_left, line, color)
-        pal_right = pal_left - 2
+        if pal_saying and pal_saying[0] == name:
+            # A little bubble in the row over the pals' heads, centered on this pal but never reaching the pet
+            bubble_text = f'({pal_saying[1]})'
+            bubble_col = min(pal_left + len(lines[0]) // 2 - len(bubble_text) // 2, left - 1 - len(bubble_text))
+            col, bubble_text = clip_to_width(bubble_col, bubble_text, left)
+            add(feet_row - len(lines), col, bubble_text, color)
+        pal_right = pal_left - PAL_GAP
 
     # The plant stands to the pet's right, past the extras, when there's room
     plant = build_plant(vitals.uptime_sec)
@@ -1705,7 +1857,9 @@ class LiveState:
         self.wish_until = 0
         self.streak_on_screen = False
         self.watering_until = 0
-
+        self.chat = []  # the lines still to show: (pal name, text)
+        self.chat_until = 0
+        self.next_chat_at = None  # set on the first step
     def press(self, key, now):
         """Handle one key press (curses gives -1 for none). Returns False when it's time to quit."""
         if key in self.QUIT_KEYS:
@@ -1753,7 +1907,37 @@ class LiveState:
         if self.was_petted and not petted:
             self.saying = pick_saying(self.mood, self.vitals, self.rng)  # back to its real mood
         self.was_petted = petted
-        return 'happy' if petted else self.mood
+        shown_mood = 'happy' if petted else self.mood
+        self.update_chat(tick, now, shown_mood)
+        return shown_mood
+
+    def update_chat(self, tick, now, mood):
+        """Pals socialize: every PAL_CHAT_SECONDS one says something, or two have a little conversation."""
+        if self.next_chat_at is None:
+            self.next_chat_at = now + self.rng.uniform(*PAL_CHAT_SECONDS)
+        if self.chat and now >= self.chat_until:
+            self.chat.pop(0)  # that line is done; the reply (if any) is next
+            self.chat_until = now + PAL_SAY_SECONDS
+            if not self.chat:
+                self.next_chat_at = now + self.rng.uniform(*PAL_CHAT_SECONDS)
+        if not self.chat and now >= self.next_chat_at:
+            names = [name for name, _, _ in build_pals(self.vitals, tick, mood)]
+            conversations = conversations_now(names, self.vitals, mood)
+            if conversations and self.rng.random() < CONVERSATION_CHANCE:
+                first, first_line, second, reply = self.rng.choice(conversations)
+                self.chat = [(first, first_line), (second, reply)]
+            elif names:
+                name = self.rng.choice(names)
+                lines = pal_lines(name, self.vitals, mood)
+                self.chat = [(name, self.rng.choice(lines))] if lines else []
+            self.chat_until = now + PAL_SAY_SECONDS
+            if not self.chat:
+                self.next_chat_at = now + self.rng.uniform(*PAL_CHAT_SECONDS)  # nobody to chat; try again later
+
+    @property
+    def pal_saying(self):
+        """(pal name, text) for the line a pal is saying right now, or None."""
+        return self.chat[0] if self.chat else None
 
     def notice(self, cells, now):
         """Look at the frame that was just drawn: a shooting star appearing makes the pet say WISH_SAYING."""
@@ -1824,7 +2008,8 @@ def run_live(screen, forced_mood=None, interface=None):
             screen.erase()
             height, width = screen.getmaxyx()
             cells = layout(height, width, shown_mood, tick, state.saying, state.vitals,
-                           show_help=state.show_help, memories=state.memories, watering=state.watering(now))
+                           show_help=state.show_help, memories=state.memories, watering=state.watering(now),
+                           pal_saying=state.pal_saying)
             for row, col, text, color in cells:
                 screen.addstr(row, col, text, colors[color])
             screen.refresh()

@@ -29,7 +29,8 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
                 now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
-                load_history=(), rainbow=False):
+                load_history=(), rainbow=False, vscode_open=False, firefox_open=False, sound_playing=False,
+                usb_drives=()):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -57,6 +58,10 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.wifi_dbm = wifi_dbm
     vitals.busiest = busiest
     vitals.rainbow = rainbow
+    vitals.vscode_open = vscode_open
+    vitals.firefox_open = firefox_open
+    vitals.sound_playing = sound_playing
+    vitals.usb_drives = list(usb_drives)
     vitals.temp_history = list(temp_history)
     vitals.load_history = list(load_history)
     return vitals
@@ -296,7 +301,11 @@ class SceneTest(unittest.TestCase):
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
                                                          holiday=HOLIDAYS[tick % len(HOLIDAYS)],
                                                          load_history=[1.0] * (300 if tick % 2 else 0),
-                                                         rainbow=tick % 5 == 0),
+                                                         rainbow=tick % 5 == 0, vscode_open=True,
+                                                         firefox_open=tick % 2 == 1, sound_playing=tick % 3 == 2,
+                                                         usb_drives=['STICK'] if tick % 4 == 3 else []),
+                                             pal_saying=(('guard', 'all quiet on port 53'), ('claude', 'happy to be here'),
+                                                         None)[tick % 3],
                                              watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -461,11 +470,14 @@ class GuardTest(unittest.TestCase):
         self.assertTrue(claude_cols, 'both pals should fit at 80 columns')
         self.assertLess(max(claude_cols), min(col for _, col, _, _ in guard))
 
-    def test_guard_gets_the_only_spot(self):
-        # 40 columns: room for one pal beside the pet
-        cells, guard = self.guard_cells(True, claude_here=True, height=20, width=40)
-        self.assertTrue(guard)
-        self.assertFalse([cell for cell in cells if cell[3] == 'claude'])
+    def test_a_lone_spot_takes_turns(self):
+        # 34 columns: room for one pal beside the pet, shared by the guard and Claude
+        def visitor(tick):
+            cells, guard = self.guard_cells(True, claude_here=True, height=20, width=34, tick=tick)
+            return 'guard' if guard else 'claude' if any(cell[3] == 'claude' for cell in cells) else None
+        self.assertEqual(visitor(1), 'guard')
+        self.assertEqual(visitor(piPet.PAL_TURN_TICKS + 1), 'claude')
+        self.assertEqual(visitor(2 * piPet.PAL_TURN_TICKS + 1), 'guard')
 
     def test_pet_thanks_the_guard_only_while_on_watch(self):
         rng = random.Random(2)
@@ -1766,6 +1778,218 @@ class HelpTest(unittest.TestCase):
     def test_short_key_hint_in_a_narrow_window(self):
         cells = piPet.layout(piPet.MIN_HEIGHT + 4, piPet.MIN_WIDTH, 'content', 1, 'hi', make_vitals())
         self.assertIn('p pet · ? help · q quit', [text for *_, text, _ in cells])
+
+
+class PalTurnsTest(unittest.TestCase):
+    PALS = [(name, ['12345'] * 3, 'plain') for name in ('a', 'b', 'c', 'd')]
+
+    def names(self, room, tick=0):
+        return [name for name, _, _ in piPet.pals_that_fit(self.PALS, room, tick)]
+
+    def test_everyone_fits(self):
+        self.assertEqual(self.names(5 * 4 + piPet.PAL_GAP * 3), ['a', 'b', 'c', 'd'])
+
+    def test_the_last_spot_takes_turns(self):
+        room = 5 * 2 + piPet.PAL_GAP  # two spots
+        turns = [self.names(room, tick=turn * piPet.PAL_TURN_TICKS) for turn in range(4)]
+        self.assertEqual(turns, [['a', 'b'], ['a', 'c'], ['a', 'd'], ['a', 'b']])
+
+    def test_no_room(self):
+        self.assertEqual(self.names(4), [])
+
+
+class ProgramPalTest(unittest.TestCase):
+    def pals(self, mood='content', tick=5, **readings):
+        """The faces (middle rows) of the program pals on screen, by color: cyan VS Code, orange fox."""
+        faces = {frame[1] for frame in piPet.FOX_PAL + piPet.VS_CODE_PAL + [piPet.FOX_CHEERING, piPet.VS_CODE_CHEERING]}
+        cells = piPet.layout(24, 80, mood, tick, 'hi', make_vitals(**readings))
+        return {color: text for *_, text, color in cells if text in faces}
+
+    def test_art_lines_up_and_is_one_column(self):
+        for frame in piPet.FOX_PAL + piPet.VS_CODE_PAL + [piPet.FOX_CHEERING, piPet.VS_CODE_CHEERING]:
+            self.assertEqual(len({len(line) for line in frame}), 1)
+            self.assertTrue(all(is_one_column(char) for char in ''.join(frame)))
+
+    def test_they_visit_while_their_program_is_open(self):
+        self.assertEqual(self.pals(), {})
+        self.assertEqual(self.pals(vscode_open=True), {'extra': '|</>|'})
+        self.assertEqual(self.pals(firefox_open=True), {'pumpkin': '(o o)'})
+
+    def test_they_blink_and_cheer(self):
+        self.assertEqual(self.pals(firefox_open=True, tick=0)['pumpkin'], '(- -)')
+        self.assertEqual(self.pals(vscode_open=True, tick=2)['extra'], '|</_|')
+        self.assertEqual(self.pals('happy', vscode_open=True, firefox_open=True), {'extra': '|^_^|', 'pumpkin': '(^ ^)'})
+
+    def test_lineup_order(self):
+        vitals = make_vitals(adguard_running=True, pi_vitals_running=True, vscode_open=True, firefox_open=True,
+                             claude_here=True)
+        self.assertEqual([name for name, _, _ in piPet.build_pals(vitals, 5, 'content')],
+                         ['guard', 'doctor', 'vscode', 'fox', 'claude'])
+
+    def test_firefox_has_many_process_names(self):
+        for name in ('firefox', 'Web Content', 'Isolated Web Co', 'WebExtensions'):
+            self.assertIn(name, piPet.FIREFOX_PROCESS_NAMES)
+
+    def test_help_says_why_they_are_here(self):
+        lines = [text for text, _ in piPet.describe_pals(make_vitals(vscode_open=True, firefox_open=True), 'content')]
+        self.assertEqual(lines, ['code    VS Code is open', 'fox     Firefox is open'])
+
+
+SAMPLE_MOUNTS = """\
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+/dev/mmcblk0p2 / ext4 rw,noatime 0 0
+/dev/sda1 /media/rpingu/MY\\040STICK vfat rw,nosuid,nodev,relatime 0 0
+"""
+
+
+class MorePalsTest(unittest.TestCase):
+    def test_sound_playing(self):
+        def playing(first_lines):
+            paths = [f'/proc/asound/card{i}/pcm0p/sub0/status' for i in range(len(first_lines))]
+            files = dict(zip(paths, first_lines))
+            with mock.patch.object(piPet.glob, 'glob', return_value=paths), \
+                    mock.patch('builtins.open', side_effect=lambda path, *a, **k: io.StringIO(files[path] + '\n')):
+                return piPet.is_sound_playing()
+        self.assertFalse(playing(['closed', 'closed']))
+        self.assertTrue(playing(['closed', 'state: RUNNING']))
+        self.assertFalse(playing([]), 'no sound cards')
+
+    def test_usb_drives(self):
+        with fake_file(SAMPLE_MOUNTS):
+            self.assertEqual(piPet.read_usb_drives(), ['MY STICK'], 'only /media/, with \\040 turned back into a space')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertEqual(piPet.read_usb_drives(), [])
+
+    def test_owl_hours(self):
+        for hour, visiting in ((21.99, False), (22.0, True), (0.0, True), (3.99, True), (4.0, False), (12.0, False)):
+            with self.subTest(hour=hour):
+                self.assertEqual(piPet.is_owl_time(hour), visiting)
+
+    def test_art_lines_up_and_is_one_column(self):
+        frames = piPet.MUSIC_PAL + piPet.USB_PAL + piPet.OWL_PAL + [piPet.MUSIC_CHEERING, piPet.USB_CHEERING, piPet.OWL_CHEERING]
+        for frame in frames:
+            self.assertEqual({len(line) for line in frame}, {5})
+            self.assertTrue(all(is_one_column(char) for char in ''.join(frame)))
+
+    def test_who_visits_when(self):
+        def names(**readings):
+            return [name for name, _, _ in piPet.build_pals(make_vitals(**readings), 1, 'content')]
+        self.assertEqual(names(), [])
+        self.assertEqual(names(hour=23.0), ['owl'])
+        self.assertEqual(names(usb_drives=['MY STICK']), ['usb'])
+        self.assertEqual(names(sound_playing=True), ['music'])
+        self.assertEqual(names(claude_here=True, hour=23.0, usb_drives=['X'], sound_playing=True, vscode_open=True),
+                         ['vscode', 'claude', 'owl', 'usb', 'music'], 'the most fleeting stand farthest out')
+
+    def test_they_move(self):
+        def frames(name, **readings):
+            return {tuple(lines) for tick in range(32)
+                    for pal, lines, _ in piPet.build_pals(make_vitals(**readings), tick, 'content') if pal == name}
+        self.assertEqual(len(frames('music', sound_playing=True)), 2, 'dancing')
+        self.assertEqual(len(frames('usb', usb_drives=['X'])), 2, 'a blinking light')
+        self.assertEqual(len(frames('owl', hour=23.0)), 2, 'a wink')
+
+    def test_help_says_why_they_are_here(self):
+        lines = [text for text, _ in piPet.describe_pals(make_vitals(hour=23.0, usb_drives=['MY STICK'], sound_playing=True),
+                                                         'content')]
+        self.assertEqual(lines, ["owl     it's late at night (10 PM to 4 AM)", 'USB     a drive is plugged in: MY STICK',
+                                 'music   sound is playing'])
+
+
+class FakeRandom:
+    """A predictable stand-in for random: gaps of 20 s, `roll` for random(), and the first of any choice."""
+    def __init__(self, roll=0.0):
+        self.roll = roll
+
+    def uniform(self, low, high):
+        return 20.0
+
+    def random(self):
+        return self.roll
+
+    def choice(self, options):
+        return options[0]
+
+
+class PalChatTest(unittest.TestCase):
+    def make_state(self, roll=0.0, **readings):
+        vitals = make_vitals(**readings)
+        vitals.refresh = lambda: None
+        return piPet.LiveState(vitals, rng=FakeRandom(roll))
+
+    def test_lines_fit_the_situation(self):
+        self.assertIn('all quiet on port 53', piPet.pal_lines('guard', make_vitals(adguard_running=True), 'content'))
+        self.assertIn('port 53 is closed!', piPet.pal_lines('guard', make_vitals(adguard_running=True, dns_answering=False), 'content'))
+        self.assertEqual(piPet.pal_lines('guard', make_vitals(adguard_running=False), 'content'), ['zzz'])
+        self.assertIn('vitals look good', piPet.pal_lines('doctor', make_vitals(), 'content'))
+        self.assertNotIn('vitals look good', piPet.pal_lines('doctor', make_vitals(), 'hot'))
+        self.assertIn('pretty night sky', piPet.pal_lines('claude', make_vitals(hour=22.0), 'content'))
+        self.assertIn('I brought MY STICK!', piPet.pal_lines('usb', make_vitals(usb_drives=['MY STICK']), 'content'))
+        for name in ('vscode', 'fox', 'owl', 'music'):
+            self.assertTrue(piPet.pal_lines(name, make_vitals(), 'content'))
+        for first, line, second, reply in piPet.CONVERSATIONS:
+            for char in line + reply:
+                self.assertTrue(is_one_column(char))
+
+    def test_conversations_need_both_pals_and_all_well(self):
+        def pairs(names, mood='content', **readings):
+            return [(chat[0], chat[2]) for chat in piPet.conversations_now(names, make_vitals(**readings), mood)]
+        self.assertEqual(pairs(['fox']), [])
+        self.assertEqual(pairs(['fox', 'vscode']), [('fox', 'vscode')])
+        self.assertIn(('guard', 'doctor'), pairs(['guard', 'doctor'], adguard_running=True))
+        self.assertNotIn(('guard', 'doctor'), pairs(['guard', 'doctor'], adguard_running=True, dns_answering=False))
+        self.assertNotIn(('guard', 'doctor'), pairs(['guard', 'doctor'], 'hot', adguard_running=True))
+
+    def test_a_conversation(self):
+        state = self.make_state(roll=0.0, firefox_open=True, vscode_open=True)  # roll 0: always a conversation
+        state.step(0, now=0.0)  # the first chat is 20 s away
+        self.assertIsNone(state.pal_saying)
+        state.step(1, now=19.9)
+        self.assertIsNone(state.pal_saying)
+        state.step(2, now=20.0)
+        self.assertEqual(state.pal_saying, ('fox', 'so many tabs!'))
+        state.step(3, now=20.0 + piPet.PAL_SAY_SECONDS)
+        self.assertEqual(state.pal_saying, ('vscode', 'same, honestly'))
+        state.step(4, now=20.0 + 2 * piPet.PAL_SAY_SECONDS)
+        self.assertIsNone(state.pal_saying)
+        self.assertEqual(state.next_chat_at, 20.0 + 2 * piPet.PAL_SAY_SECONDS + 20.0, 'the next chat is scheduled')
+
+    def test_a_single_line(self):
+        state = self.make_state(roll=0.9, firefox_open=True, vscode_open=True)  # roll 0.9: no conversation
+        state.step(0, now=0.0)
+        state.step(1, now=20.0)
+        self.assertEqual(state.pal_saying, ('vscode', 'saved!'), 'the first visiting pal, saying its first line')
+        state.step(2, now=20.0 + piPet.PAL_SAY_SECONDS)
+        self.assertIsNone(state.pal_saying)
+
+    def test_nobody_to_chat_with(self):
+        state = self.make_state()
+        state.step(0, now=0.0)
+        state.step(1, now=20.0)
+        self.assertIsNone(state.pal_saying)
+        self.assertEqual(state.next_chat_at, 40.0)
+
+    def bubble(self, pal_saying, width=80, **readings):
+        vitals = make_vitals(**readings)
+        cells = piPet.layout(24, width, 'content', 5, 'hi', vitals, pal_saying=pal_saying)
+        text = f'({pal_saying[1]})'
+        return cells, next(((row, col, color) for row, col, cell_text, color in cells if cell_text == text), None)
+
+    def test_the_bubble_floats_over_its_pal_and_stops_before_the_pet(self):
+        everyone = dict(adguard_running=True, pi_vitals_running=True, vscode_open=True, firefox_open=True)
+        cells, (row, col, color) = self.bubble(('guard', 'all quiet on port 53'), **everyone)
+        guard_top = min(r for r, _, text, c in cells if c == 'guard' and not text.startswith('('))
+        pet_left = min(c for _, c, text, color in cells if color in ('leaf', 'berry') and text.strip())
+        self.assertEqual(row, guard_top - 1)
+        self.assertEqual(color, 'guard', 'in the pal\'s own color')
+        self.assertLess(col + len('(all quiet on port 53)'), pet_left)
+        cells, (row, col, color) = self.bubble(('fox', 'so many tabs!'), **everyone)
+        fox_left = min(c for _, c, text, cl in cells if cl == 'pumpkin' and text != '(so many tabs!)')
+        self.assertEqual(col + len('(so many tabs!)') // 2, fox_left + 2, 'centered on the fox')
+
+    def test_no_bubble_for_a_pal_who_isnt_on_screen(self):
+        self.assertIsNone(self.bubble(('fox', 'so many tabs!'))[1], 'the fox isn\'t visiting')
+        self.assertIsNone(self.bubble(('guard', 'on duty'), width=piPet.MIN_WIDTH, adguard_running=True)[1], 'no room')
 
 
 class CheerTest(unittest.TestCase):
