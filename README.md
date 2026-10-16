@@ -25,6 +25,8 @@ The pet checks the Pi every 2 seconds and picks the first mood that fits:
 | Sleepy | Load under 0.3 and almost no network traffic | Eyes closed, floating Zs |
 | Content | Anything else | Smiles and blinks |
 
+The status line's fan reading has a little fan, `fan / 3968 rpm`, that turns faster the faster the real fan spins (one step every frame at 6,000 rpm and up, the most a 4-frames-a-second screen can show) and sits still as `-` when the fan is off.
+
 Under the status line, a trend row draws the last 10 minutes of temperature and load as Braille-dot sparklines (`temp ⣀⣠⣤⣶⣿  load ⣀⣀⣤⣀⣀  10 min`): temperature from 40 °C at the bottom to 80 °C at the top, and load from 0 up to the number of cores, newest on the right. It fills in over the first few minutes, and in a tight window it gives way before the scene does.
 
 When the pet is busy it sometimes says which program is keeping it busy ("Firefox is keeping me busy!"), adding up all of a program's processes (VS Code's 20-odd count as one), and the `?` page always shows the busiest program and how much of a core it's using.
@@ -112,7 +114,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-203 standard-library tests, no sensors needed. They check:
+207 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -136,6 +138,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - memories: where the file lives, starting fresh from a missing or damaged file (entry by entry), saving without leaving a temporary file, not crashing where it can't write, two Pi Pets adding up instead of overwriting, "missed you!" after a day away, counting each petting once, and the "Together" line
 - the help screen: every mood explained with its reading, the sky for each time of day, moon phase names, the pals and plant explained, alerts in red, wrapping inside small windows, `?` and `h` toggling it, and the short key hint in narrow windows
 - cheering: the guard and doctor cheer only while the pet is petted, an alarmed or sleeping guard isn't interrupted, and Claude twinkles faster
+- the fan icon: nothing without a fan, still when stopped, turning faster with the speed (but never more than a step a frame), and on both status lines
 - the trend row: sparkline heights (clamped to the scale), a short history sitting on the right, a full one filling the line, Braille being one column wide, needing history and room, sitting under the status line, and giving way to the scene in a tight window
 - the busiest program: reading names with spaces and parentheses, leaving out kernel threads and Pi Pet itself, adding up a program's processes (Firefox's many), telling a renamed process from a reused pid, skipping readings too close together, and what the pet and the `?` page say
 - Wi-Fi: reading the signal for one interface (and nothing for wired ones), bars like a phone, bars on the status line, the weak-signal alert and fretting, and the help page's Network line

@@ -132,6 +132,8 @@ WATER_SAYING = 'the plant says thanks!'
 
 # Network speed is only measured over at least this long; one packet over a few microseconds reads as a huge speed
 MIN_RATE_SECONDS = 0.5
+FAN_FRAMES = '|/-\\'  # the status line's fan icon, a quarter turn apart
+FAN_FULL_SPEED_RPM = 6000  # at this speed or faster the icon turns one step every frame (the most 4 FPS can show)
 HISTORY_SAMPLES = 300  # readings kept for the trend sparklines: 10 minutes at one every 2 seconds
 MIN_TREND_SAMPLES = 4  # fewer than this (a --once snapshot, say) and there's no trend to draw
 TEMP_TREND_RANGE = (40, 80)  # °C from the bottom to the top of the temperature sparkline
@@ -685,9 +687,20 @@ def build_bubble(text):
     ]
 
 
-def build_status(vitals):
+def fan_icon(rpm, tick):
+    """The status line's little fan, turning faster the faster the real fan spins: '' without a fan
+    reading, a still '-' when it's stopped."""
+    if rpm is None:
+        return ''
+    if rpm <= 0:
+        return '-'
+    steps_per_tick = min(1.0, rpm / FAN_FULL_SPEED_RPM)  # more than one step a frame would look like it's slowing
+    return FAN_FRAMES[int(tick * steps_per_tick) % len(FAN_FRAMES)]
+
+
+def build_status(vitals, tick=0):
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
-    fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)} rpm'
+    fan = '--' if vitals.fan_rpm is None else f'{fan_icon(vitals.fan_rpm, tick)} {int(vitals.fan_rpm)} rpm'
     signal = format_wifi_bars(vitals.wifi_dbm)
     network = ' '.join(part for part in (vitals.interface, signal, format_rate(vitals.net_rate)) if part)
     return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {network}'
@@ -737,10 +750,10 @@ def build_trend(vitals, width):
     return placed
 
 
-def build_short_status(vitals):
+def build_short_status(vitals, tick=0):
     """A narrower status line for small windows."""
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
-    fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)}'
+    fan = '--' if vitals.fan_rpm is None else f'{fan_icon(vitals.fan_rpm, tick)} {int(vitals.fan_rpm)}'
     return f'{temp}  load {vitals.load:.2f}  fan {fan}  {format_rate(vitals.net_rate)}'
 
 
@@ -1340,9 +1353,9 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     for row, col, text in extras:
         add(pet_top + row, left + col, text, extras_color)
 
-    status = build_status(vitals)
+    status = build_status(vitals, tick)
     if len(status) > width - 1:
-        status = build_short_status(vitals)
+        status = build_short_status(vitals, tick)
     status_row = pet_top + pet_height + 1
     if show_scene:
         for col, text, color in build_ground(width, vitals.holiday, tick):

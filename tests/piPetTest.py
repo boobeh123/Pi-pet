@@ -1022,6 +1022,33 @@ class WifiTest(unittest.TestCase):
         self.assertIn('Network', labels)
 
 
+class FanTest(unittest.TestCase):
+    def turns(self, rpm, ticks=24):
+        icons = [piPet.fan_icon(rpm, tick) for tick in range(ticks)]
+        return sum(earlier != later for earlier, later in zip(icons, icons[1:]))
+
+    def test_no_fan_or_a_stopped_fan(self):
+        self.assertEqual(piPet.fan_icon(None, 5), '')
+        self.assertEqual({piPet.fan_icon(0, tick) for tick in range(8)}, {'-'})
+
+    def test_faster_fan_turns_faster(self):
+        self.assertLess(self.turns(1500), self.turns(4000))
+        self.assertLess(self.turns(4000), self.turns(piPet.FAN_FULL_SPEED_RPM))
+        self.assertEqual(self.turns(piPet.FAN_FULL_SPEED_RPM), 23, 'one step every frame at full speed')
+        self.assertEqual(self.turns(20000), 23, 'no faster than that, or it would look like it slows down')
+
+    def test_every_frame_shows_up_and_is_one_column(self):
+        self.assertEqual({piPet.fan_icon(4000, tick) for tick in range(24)}, set(piPet.FAN_FRAMES))
+        for char in piPet.FAN_FRAMES:
+            self.assertTrue(is_one_column(char))
+
+    def test_status_lines_show_the_fan(self):
+        vitals = make_vitals()  # 2000 rpm
+        self.assertIn('fan | 2000 rpm', piPet.build_status(vitals, tick=0))
+        self.assertIn('fan | 2000', piPet.build_short_status(vitals, tick=0))
+        self.assertNotIn('fan | 2000', piPet.build_status(vitals, tick=12), 'it has turned by then')
+
+
 class ClockTest(unittest.TestCase):
     def test_format_clock(self):
         cases = [((2026, 10, 15, 0, 5), 'Thu Oct 15  12:05 AM'), ((2026, 10, 15, 9, 7), 'Thu Oct 15  9:07 AM'),
