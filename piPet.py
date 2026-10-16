@@ -116,6 +116,10 @@ BUSY_LOAD = 2.0
 SURF_BYTES_PER_SEC = 200 * 1024
 SLEEPY_LOAD = 0.3
 SLEEPY_BYTES_PER_SEC = 5 * 1024
+WIFI_BAR_DBM = (-55, -65, -75, -85)  # Wi-Fi signal: 4 bars at -55 dBm or stronger, 3 at -65, 2 at -75, 1 at -85
+WEAK_WIFI_BARS = 1  # this many bars or fewer, and the pet frets
+WIFI_BAR_WORDS = ['very weak', 'weak', 'fair', 'good', 'excellent']
+WEAK_WIFI_SAYINGS = ['the Wi-Fi feels far away', 'can you hear me now?']
 STUFFED_DISK_PERCENT = 90   # SD card this full or more
 HUNGRY_MEMORY_PERCENT = 10  # less memory than this still available
 GROGGY_UPTIME_SEC = 5 * 60  # booted less than this long ago
@@ -249,6 +253,38 @@ def read_net_bytes(interface):
     except (OSError, ValueError, IndexError):
         pass
     return None
+
+
+def read_wifi_dbm(interface):
+    """Wi-Fi signal strength in dBm for a wireless interface (from /proc/net/wireless), or None for a
+    wired interface, a missing one, or a driver that doesn't report it."""
+    try:
+        with open('/proc/net/wireless') as f:
+            for line in f:
+                name, _, fields = line.partition(':')
+                if name.strip() == interface:
+                    level = float(fields.split()[2].rstrip('.'))
+                    return level if level < 0 else None  # 0 or positive means no dBm reading
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def wifi_bars(dbm):
+    """0-4 bars from signal strength in dBm, like a phone."""
+    return sum(dbm >= threshold for threshold in WIFI_BAR_DBM)
+
+
+def format_wifi_bars(dbm):
+    """Signal bars for the status line, like '|||.', or '' without a Wi-Fi reading."""
+    if dbm is None:
+        return ''
+    bars = wifi_bars(dbm)
+    return '|' * bars + '.' * (len(WIFI_BAR_DBM) - bars)
+
+
+def is_wifi_weak(vitals):
+    return vitals.wifi_dbm is not None and wifi_bars(vitals.wifi_dbm) <= WEAK_WIFI_BARS
 
 
 def get_default_interface():
@@ -435,6 +471,7 @@ class Vitals:
         self.year = now.year
         self.holiday = holiday_on(now.month, now.day)
         self.update_net_rate()
+        self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
 
     def update_net_rate(self):
         """Bytes per second since the last reading that was at least MIN_RATE_SECONDS ago."""
@@ -580,7 +617,9 @@ def build_bubble(text):
 def build_status(vitals):
     temp = '--' if vitals.temp_c is None else f'{vitals.temp_c:.1f}°C'
     fan = '--' if vitals.fan_rpm is None else f'{int(vitals.fan_rpm)} rpm'
-    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {vitals.interface} {format_rate(vitals.net_rate)}'
+    signal = format_wifi_bars(vitals.wifi_dbm)
+    network = ' '.join(part for part in (vitals.interface, signal, format_rate(vitals.net_rate)) if part)
+    return f'temp {temp}  ·  load {vitals.load:.2f}  ·  fan {fan}  ·  {network}'
 
 
 def build_short_status(vitals):
@@ -605,6 +644,8 @@ def build_alerts(vitals):
         alerts.append('AdGuard stopped')
     elif vitals.adguard_running and vitals.dns_answering is False:
         alerts.append('DNS port 53 closed')
+    if is_wifi_weak(vitals):
+        alerts.append(f'weak Wi-Fi ({vitals.wifi_dbm:.0f} dBm)')
     return '  ·  '.join(alerts)
 
 
@@ -981,6 +1022,14 @@ def describe_sky(vitals):
     return f'night: {phase} (day {vitals.moon_age:.1f} of 29.5), a ringed planet, the odd shooting star'
 
 
+def describe_network(vitals):
+    """The network in words: interface, speed, and Wi-Fi signal when there is one."""
+    text = f'{vitals.interface}: {format_rate(vitals.net_rate)}'
+    if vitals.wifi_dbm is not None:
+        text += f', signal {vitals.wifi_dbm:.0f} dBm ({WIFI_BAR_WORDS[wifi_bars(vitals.wifi_dbm)]})'
+    return text if vitals.online else f'{text}, but no route to the internet'
+
+
 def describe_pals(vitals, mood):
     """One line per visiting pal, saying why it's here."""
     lines = []
@@ -1035,6 +1084,7 @@ def build_help(vitals, mood, memories=None, today=None):
     lines = [
         ('Mood', f'{mood}: {explain_mood(vitals, mood)}', 'plain'),
         ('Sky', describe_sky(vitals), 'plain'),
+        ('Network', describe_network(vitals), 'plain'),
     ]
     for i, (text, color) in enumerate(describe_pals(vitals, mood)):
         lines.append(('Pals' if i == 0 else '', text, color))
@@ -1241,7 +1291,8 @@ def pick_saying(mood, vitals, rng=random):
                       + (GUARD_SAYINGS if vitals.adguard_running and vitals.dns_answering is not False else [])
                       + (DOCTOR_SAYINGS if vitals.pi_vitals_running else [])
                       + (PLANT_SAYINGS if plant_stage(vitals.uptime_sec) == len(PLANT_STAGES) - 1 else [])
-                      + holiday_sayings(vitals))
+                      + holiday_sayings(vitals)
+                      + (WEAK_WIFI_SAYINGS if is_wifi_weak(vitals) else []))
     if friend_sayings and mood in CHATTY_MOODS and rng.random() < FRIEND_SAYING_CHANCE:
         return rng.choice(friend_sayings)
     return rng.choice(SAYINGS[mood])

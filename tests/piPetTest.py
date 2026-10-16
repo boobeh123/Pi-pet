@@ -27,7 +27,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 disk_used_percent=50.0, memory_free_percent=70.0, uptime_sec=10_000.0, online=True, hour=12.0,
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
-                now=datetime.datetime(2026, 10, 15, 20, 42)):
+                now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -52,6 +52,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.holiday = holiday
     vitals.year = year
     vitals.now = now
+    vitals.wifi_dbm = wifi_dbm
     return vitals
 
 
@@ -143,7 +144,8 @@ class LayoutTest(unittest.TestCase):
 
     def all_layouts(self, sizes=SIZES):
         # With both pals and the plant in flower (its tallest), wherever there's room
-        vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY)
+        vitals = make_vitals(claude_here=True, adguard_running=True, pi_vitals_running=True, uptime_sec=8 * DAY,
+                             wifi_dbm=-60)  # the longest status line, with signal bars
         for height, width in sizes:
             for mood, sayings in piPet.SAYINGS.items():
                 for saying in sayings:
@@ -847,6 +849,52 @@ class HolidayTest(unittest.TestCase):
         holidays = {piPet.holiday_on(month, day) for month in range(1, 13) for day in range(1, 32)} - {None}
         self.assertEqual(holidays, set(piPet.HOLIDAY_SAYINGS))
         self.assertEqual(holidays, set(piPet.HOLIDAY_DESCRIPTIONS))
+
+
+SAMPLE_WIRELESS = """\
+Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE
+ face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22
+ wlan0: 0000   70.  -22.  -256        0      0      0      5      0        0
+"""
+
+
+class WifiTest(unittest.TestCase):
+    def test_reads_the_signal_for_one_interface(self):
+        with fake_file(SAMPLE_WIRELESS):
+            self.assertEqual(piPet.read_wifi_dbm('wlan0'), -22.0)
+        with fake_file(SAMPLE_WIRELESS):
+            self.assertIsNone(piPet.read_wifi_dbm('eth0'), 'wired interfaces have no signal')
+        with fake_file(SAMPLE_WIRELESS.replace('-22.', '0.')):
+            self.assertIsNone(piPet.read_wifi_dbm('wlan0'), 'a driver without a dBm reading')
+        with mock.patch('builtins.open', side_effect=OSError):
+            self.assertIsNone(piPet.read_wifi_dbm('wlan0'))
+
+    def test_bars_like_a_phone(self):
+        cases = [(-22, 4, '||||'), (-55, 4, '||||'), (-56, 3, '|||.'), (-70, 2, '||..'), (-80, 1, '|...'), (-90, 0, '....')]
+        for dbm, bars, text in cases:
+            with self.subTest(dbm=dbm):
+                self.assertEqual(piPet.wifi_bars(dbm), bars)
+                self.assertEqual(piPet.format_wifi_bars(dbm), text)
+        self.assertEqual(piPet.format_wifi_bars(None), '')
+
+    def test_status_line_shows_the_bars(self):
+        self.assertIn('wlan0 |||. 0.0 KB/s', piPet.build_status(make_vitals(wifi_dbm=-60)))
+        self.assertIn('wlan0 0.0 KB/s', piPet.build_status(make_vitals()), 'no bars without a Wi-Fi reading')
+
+    def test_weak_signal_brings_an_alert_and_some_fretting(self):
+        weak = make_vitals(wifi_dbm=-80)
+        self.assertIn('weak Wi-Fi (-80 dBm)', piPet.build_alerts(weak))
+        self.assertNotIn('Wi-Fi', piPet.build_alerts(make_vitals(wifi_dbm=-70)))
+        rng = random.Random(7)
+        said = {piPet.pick_saying('content', weak, rng) for _ in range(200)}
+        self.assertTrue(said & set(piPet.WEAK_WIFI_SAYINGS))
+
+    def test_help_describes_the_network(self):
+        self.assertEqual(piPet.describe_network(make_vitals(wifi_dbm=-22, net_rate=1024)),
+                         'wlan0: 1.0 KB/s, signal -22 dBm (excellent)')
+        self.assertIn('no route', piPet.describe_network(make_vitals(online=False)))
+        labels = [label for label, _, _ in piPet.build_help(make_vitals(), 'content')]
+        self.assertIn('Network', labels)
 
 
 class ClockTest(unittest.TestCase):
