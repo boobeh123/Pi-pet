@@ -57,7 +57,7 @@ python3 piPet.py --iface eth0 # watch one network interface (default: whichever 
 python3 piPet.py --help       # list the options
 ```
 
-In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky, and the pet says "make a wish!" A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
+In a window of about 40×20 or bigger it gets a scene: grass under its feet, and a sky that follows the Pi's clock. A yellow `-O-` sun crosses from 06:00 to 18:00 (highest at noon) while clouds drift by (the busier the CPU, the cloudier the day: 1 cloud under load 0.5, 2 under 1.5, 3 above). After a hot spell (the CPU at 70 °C or more), once it cools back down, a red-yellow-blue rainbow appears for 10 minutes on the side of the sky opposite the sun, behind any passing clouds. In the last hour before sunset the sun and clouds turn red and the first stars come out one by one; at dawn it runs the other way. Then the moon crosses among twinkling stars until morning. The moon is drawn in its real phase: `)` waxing crescent, `D` first quarter, `O` around full, `C` last quarter, `(` waning crescent, and no moon (but more stars) on a new moon night. Its shape is real, but its path is simplified: a real moon rises later each night. Now and then (about once every three minutes, at random) a yellow shooting star `--*` streaks across the night sky, and the pet says "make a wish!" A magenta ringed planet `-()-` sits among the stars all night and drifts 3 columns further each day, hiding behind the moon when they meet. The planet is decorative, not a real planet's position. On the grass, bouncing pets hop up instead of down.
 
 ## Friends
 
@@ -107,7 +107,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 | New Year | Dec 31 and Jan 1 | Fireworks at night: a rocket goes up, bursts into `\\|/ -*- /\|\`, and fades to sparks |
 | Pi Day | Mar 14 | Clouds that read `(3.14159)` |
 | Valentine's Day | Feb 14 | A `<3` on its head, and hearts floating in the sky |
-| St. Patrick's Day | Mar 17 | A green top hat `_[_]_` |
+| St. Patrick's Day | Mar 17 | A green top hat `_[_]_`, and a rainbow all day |
 | Fourth of July | Jul 4 | Red, white and blue fireworks at night |
 | Thanksgiving | The fourth Thursday of November | A pilgrim hat `_\|=\|_` |
 | Pi Pet's birthday | Oct 8 | A party hat `/*\` instead of its leaf, and "I'm 1 today!" (born Oct 8, 2026) |
@@ -118,7 +118,7 @@ The Pi's calendar brings a few decorations, and on the day the pet's calm moods 
 python3 -m unittest discover -s tests -p "*Test.py"
 ```
 
-210 standard-library tests, no sensors needed. They check:
+215 standard-library tests, no sensors needed. They check:
 
 - every character the pet draws is exactly one terminal column wide (wide or ambiguous-width characters like `﹏` knock the body out of line in some terminals), and every frame's lines line up
 - the screen layout at several window sizes: nothing spills past the edge or draws over anything else, and the status line always shows
@@ -136,6 +136,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 - dawn and dusk: how deep into twilight each hour is, the red sun and glowing clouds, stars coming out at dusk and fading at dawn, and the dusk stars being the first stars of the night
 - the planet: one at night and none by day, staying put all night, drifting and wrapping day by day, and hiding behind the moon
 - shooting stars: about one every three minutes, crossing and falling over 1.5 seconds, a different schedule each run, night only, and never overlapping the moon or stars
+- the rainbow: 10 minutes after a hot spell ends (not without one, and not if it gets hot again), by day only, opposite the sun, all day on St. Patrick's Day, and explained on the `?` page
 - the clouds: how many for each load, daytime only, drifting right and wrapping around, never colliding with each other or the sun over a long day, and sometimes hiding the sun
 - the live view's timing rules, with a fake clock: the opening line, quit keys, a new saying every 10 seconds (but not at the start) or on a mood change, petting and petting again, and greeting Claude
 - wishes: a shooting star (from a real night sky) brings "make a wish!" for a few seconds, once per streak, without being cut short by the saying rotation or interrupting petting
@@ -169,6 +170,7 @@ python3 -m unittest discover -s tests -p "*Test.py"
 | Holidays | the Pi's local date |
 | Time of day | the Pi's local clock (`time.localtime()`) |
 | Clouds | the 1-minute load, same as busy |
+| Rainbow | the CPU temperature cooling below 70 °C after being at or above it |
 | Planet | the day of the year (decorative) |
 | Moon phase | days since a known new moon (2000-01-06 18:14 UTC) modulo the 29.53-day lunar month; good to about a day |
 | Claude visiting | a process named `claude` in `/proc/*/comm` |

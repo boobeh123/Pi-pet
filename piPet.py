@@ -51,6 +51,8 @@ MOON_SHAPES = [None, ')', 'D', 'O', 'O', 'O', 'C', '(']  # by eighth of the cycl
 MOON_PHASE_NAMES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibbous', 'full moon',
                     'waning gibbous', 'last quarter', 'waning crescent']
 CLOUD_SHAPES = [['.--.', '(____)'], ['.-~~-.', '(______)']]  # top line sits centered over the bottom one
+RAINBOW_SECONDS = 10 * 60  # how long a rainbow stays after a hot spell ends
+RAINBOW_BANDS = [('.-~~~~~~~~~~-.', 'berry'), ('.-~~~~~~~~-.', 'sun'), ('.-~~~~~~-.', 'guard')]  # top row first
 TWILIGHT_STAR_SHARE = 0.4  # at sunset (and at sunrise), this share of a normal night's stars is out
 CLOUD_TICKS_PER_COLUMN = 8  # half a column a second at 4 FPS
 PLANET = '-()-'  # a ringed planet: decorative, not a real planet's position
@@ -530,6 +532,9 @@ class Vitals:
         self.process_ticks = None  # the last read_process_ticks, for working out the busiest program
         self.process_time = None
         self.busiest = None  # (name, percent of one core), once there are two readings to compare
+        self.was_hot = False  # for the rainbow after a hot spell
+        self.cooled_at = None
+        self.rainbow = False
         self.temp_history = collections.deque(maxlen=HISTORY_SAMPLES)  # for the trend sparklines
         self.load_history = collections.deque(maxlen=HISTORY_SAMPLES)
         self.refresh()
@@ -560,9 +565,20 @@ class Vitals:
         self.holiday = holiday_on(now.month, now.day, now.year)
         self.update_net_rate()
         self.wifi_dbm = read_wifi_dbm(self.interface)  # after update_net_rate, which may switch interfaces
+        self.update_rainbow()
         if self.temp_c is not None:
             self.temp_history.append(self.temp_c)
         self.load_history.append(self.load)
+
+    def update_rainbow(self, now=None):
+        """A rainbow shows for RAINBOW_SECONDS after a hot spell ends (but not if it gets hot again).
+        `now` is time.monotonic(), unless a test passes its own."""
+        now = time.monotonic() if now is None else now
+        hot = self.temp_c is not None and self.temp_c >= HOT_TEMP_C
+        if self.was_hot and not hot:
+            self.cooled_at = now
+        self.was_hot = hot
+        self.rainbow = not hot and self.cooled_at is not None and now - self.cooled_at < RAINBOW_SECONDS
 
     def update_busiest(self):
         """Read every process's CPU time, and work out the busiest program since the last reading at least
@@ -1003,11 +1019,13 @@ def heart_spots(width):
     return [(rng.randrange(SKY_HEIGHT), rng.randrange(width - 3)) for _ in range(max(2, width // 16))]
 
 
-def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None):
+def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed=0, day_of_year=0, holiday=None,
+              rainbow=False):
     """The sky across the top of the window as (row, col, text, color): a sun and clouds by day,
     the moon in its real phase, a ringed planet, stars and the odd shooting star by night, and a red
     sun, glowing clouds and the first (or last) stars at dusk and dawn. Holidays add bats (Halloween),
     fireworks (New Year, the Fourth of July), hearts (Valentine's Day) and clouds made of digits (Pi Day).
+    A rainbow shows by day after a hot spell (and all day on St. Patrick's Day), opposite the sun.
 
     The sun (06:00-18:00) and the moon (18:00-06:00) cross from left to right, highest halfway through.
     The moon's shape is real; its path is simplified (a real moon rises later each night).
@@ -1029,12 +1047,31 @@ def build_sky(width, hour, tick, load=0.0, moon_age=SYNODIC_MONTH_DAYS / 2, seed
         """True if nothing in the sky so far is on these spots (or within `margin` columns of them)."""
         return not any((row, near) in taken for near in range(col - margin, col + len(text) + margin))
 
+    def place_behind(row, col, text, color):
+        """Place text behind whatever's already in the sky: only the runs of it that land on free spots."""
+        run_start = None
+        for offset in range(len(text) + 1):
+            free = offset < len(text) and is_free(row, col + offset, text[offset])
+            if free and run_start is None:
+                run_start = offset
+            elif not free and run_start is not None:
+                place(row, col + run_start, text[run_start:offset], color)
+                run_start = None
+
     if daytime:
         shapes = PI_DAY_CLOUDS if holiday == 'pi_day' else CLOUD_SHAPES
         for row, col, text, _ in build_clouds(width, load, tick, shapes):
             place(row, col, text, 'sunset' if twilight else 'cloud')  # clouds glow at sunrise and sunset
         if is_free(body_row, body_col, body):  # else behind a cloud
             place(body_row, body_col, body, 'sunset' if twilight else 'sun')
+        if rainbow or holiday == 'st_patricks':
+            # Opposite the sun, like a real rainbow, and behind the clouds
+            widest = len(RAINBOW_BANDS[0][0])
+            center = width - 1 - (body_col + len(body) // 2)
+            rainbow_left = min(max(0, center - widest // 2), max(0, width - 1 - widest))
+            for row, (band, color) in enumerate(RAINBOW_BANDS):
+                col, band = clip_to_width(rainbow_left + (widest - len(band)) // 2, band, width)
+                place_behind(row, col, band, color)
         star_count = int(width // 8 * TWILIGHT_STAR_SHARE * twilight)
     else:
         if body:
@@ -1187,6 +1224,10 @@ def describe_sky(vitals):
             return f'dusk: a red sun, the first stars, {weather}'
         if hour < 7:
             return f'dawn: a red sun, the last stars, {weather}'
+        if vitals.rainbow:
+            return f'day: the sun, {weather}, and a rainbow because the CPU just cooled down after a hot spell'
+        if vitals.holiday == 'st_patricks':
+            return f"day: the sun, {weather}, and a rainbow for St. Patrick's Day"
         return f'day: the sun, {weather}'
     phase = MOON_PHASE_NAMES[moon_eighth(vitals.moon_age)]
     return f'night: {phase} (day {vitals.moon_age:.1f} of 29.5), a ringed planet, the odd shooting star'
@@ -1336,7 +1377,7 @@ def layout(height, width, mood, tick, saying, vitals, show_hint=True, show_help=
     if show_scene:
         top = SKY_HEIGHT + (usable - SKY_HEIGHT - block_height - 2) // 2
         sky = build_sky(width, vitals.hour, tick, vitals.load, vitals.moon_age, vitals.sky_seed, vitals.day_of_year,
-                        vitals.holiday)
+                        vitals.holiday, vitals.rainbow)
         for row, col, text, color in sky:
             add(row, col, text, color)
     else:

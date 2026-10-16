@@ -29,7 +29,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
                 claude_here=False, adguard_running=None, pi_vitals_running=False,
                 moon_age=14.8, sky_seed=0, day_of_year=200, dns_answering=None, holiday=None, year=2026,
                 now=datetime.datetime(2026, 10, 15, 20, 42), wifi_dbm=None, busiest=None, temp_history=(),
-                load_history=()):
+                load_history=(), rainbow=False):
     """A Vitals with chosen readings, without touching the real sensors. Defaults are a healthy Pi."""
     vitals = object.__new__(piPet.Vitals)
     vitals.forced_mood = forced_mood
@@ -56,6 +56,7 @@ def make_vitals(temp_c=50.0, load=0.5, net_rate=0, forced_mood=None, undervoltag
     vitals.now = now
     vitals.wifi_dbm = wifi_dbm
     vitals.busiest = busiest
+    vitals.rainbow = rainbow
     vitals.temp_history = list(temp_history)
     vitals.load_history = list(load_history)
     return vitals
@@ -294,7 +295,8 @@ class SceneTest(unittest.TestCase):
                                                          adguard_running=tick % 2 == 0,  # guard awake or asleep
                                                          dns_answering=tick % 4 != 0,  # and sometimes alarmed
                                                          holiday=HOLIDAYS[tick % len(HOLIDAYS)],
-                                                         load_history=[1.0] * (300 if tick % 2 else 0)),
+                                                         load_history=[1.0] * (300 if tick % 2 else 0),
+                                                         rainbow=tick % 5 == 0),
                                              watering=tick % 3 == 1)
                         seen = set()
                         for row, col, text, _ in cells:
@@ -694,6 +696,50 @@ class ClipTest(unittest.TestCase):
                 self.assertEqual(piPet.clip_to_width(col, text, width=10), expected)
 
 
+class RainbowTest(unittest.TestCase):
+    def watch(self, temps_and_times):
+        """Feed (temperature, seconds) readings through update_rainbow; return whether each showed a rainbow."""
+        vitals = object.__new__(piPet.Vitals)
+        vitals.was_hot, vitals.cooled_at, vitals.rainbow = False, None, False
+        shown = []
+        for temp, now in temps_and_times:
+            vitals.temp_c = temp
+            vitals.update_rainbow(now)
+            shown.append(vitals.rainbow)
+        return shown
+
+    def test_a_rainbow_after_a_hot_spell(self):
+        minutes = 60
+        self.assertEqual(self.watch([(60, 0), (72, 10), (65, 20), (60, 20 + 9 * minutes), (60, 20 + 10 * minutes)]),
+                         [False, False, True, True, False])
+
+    def test_no_rainbow_without_heat_or_while_hot_again(self):
+        self.assertEqual(self.watch([(60, 0), (65, 10), (None, 20)]), [False, False, False])
+        self.assertEqual(self.watch([(72, 0), (60, 10), (71, 20)]), [False, True, False])
+
+    def bands(self, cells):
+        colors = {band: color for band, color in piPet.RAINBOW_BANDS}
+        return [(row, col, text, color) for row, col, text, color in cells if color in colors.values() and set(text) <= set('.-~')]
+
+    def test_drawn_by_day_opposite_the_sun(self):
+        for hour in (9.0, 15.0):
+            sky = piPet.build_sky(80, hour, 0, load=0.0, rainbow=True)
+            sun_col = round((hour - 6) / 12 * (80 - 1 - 3))  # where build_sky puts the sun, even behind a cloud
+            rainbow = self.bands(sky)
+            with self.subTest(hour=hour):
+                self.assertEqual({row for row, *_ in rainbow}, {0, 1, 2})
+                middle = sum(col + len(text) / 2 for _, col, text, _ in rainbow) / len(rainbow)
+                self.assertEqual(middle > 40, sun_col < 40, 'on the other side of the sky from the sun')
+        self.assertEqual(self.bands(piPet.build_sky(80, 22.0, 0, rainbow=True)), [], 'no rainbows at night')
+        self.assertEqual(self.bands(piPet.build_sky(80, 12.0, 0)), [])
+
+    def test_st_patricks_day_has_a_rainbow_all_day(self):
+        self.assertTrue(self.bands(piPet.build_sky(80, 12.0, 0, holiday='st_patricks')))
+
+    def test_help_explains_the_rainbow(self):
+        self.assertIn('rainbow because the CPU just cooled down', piPet.describe_sky(make_vitals(hour=12.0, rainbow=True)))
+
+
 class CloudTest(unittest.TestCase):
     def clouds(self, cells):
         return [cell for cell in cells if cell[3] == 'cloud']
@@ -724,7 +770,8 @@ class CloudTest(unittest.TestCase):
             for load in (0.0, 1.0, 3.0):
                 for hour in (6.1, 6.5, 9.0, 12.0, 15.0, 17.5, 17.9):  # includes dawn and dusk, with stars
                     for tick in range(0, 1200, 25):
-                        cells = piPet.build_sky(width, hour, tick, load, holiday='pi_day' if tick % 2 else None)
+                        cells = piPet.build_sky(width, hour, tick, load, holiday='pi_day' if tick % 2 else None,
+                                                rainbow=tick % 3 == 0)
                         seen = set()
                         for row, col, text, _ in cells:
                             with self.subTest(width=width, load=load, hour=hour, tick=tick, text=text):
@@ -1757,7 +1804,8 @@ class NetRateTest(unittest.TestCase):
         # One 1500-byte packet between the two readings at startup used to read as ~30 MB/s
         with mock.patch.object(piPet.time, 'monotonic', side_effect=[100.0, 100.00005]), \
                 mock.patch.object(piPet, 'read_net_bytes', side_effect=[1_000_000, 1_001_500]), \
-                mock.patch.object(piPet.Vitals, 'update_busiest', return_value={}):  # it reads the clock too
+                mock.patch.object(piPet.Vitals, 'update_busiest', return_value={}), \
+                mock.patch.object(piPet.Vitals, 'update_rainbow'):  # these read the clock too
             vitals = piPet.Vitals(interface='wlan0')
         self.assertEqual(vitals.net_rate, 0)
         self.assertNotEqual(vitals.mood(), 'surfing')
